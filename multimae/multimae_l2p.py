@@ -194,7 +194,7 @@ class MultiMAE(nn.Module):
 
     @torch.jit.ignore
     def no_weight_decay(self):
-        no_wd_set = {'global_tokens'}
+        no_wd_set = {'global_tokens' , 'task_specific_prompts_1' ,'task_specific_prompts_2' , 'layer_prompt_pools' }
 
         for task, adapter in self.input_adapters.items():
             if hasattr(adapter, 'no_weight_decay'):
