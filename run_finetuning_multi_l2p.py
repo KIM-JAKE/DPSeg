@@ -198,7 +198,7 @@ def get_args():
                         help='Token dimension for the decoder layers, for convnext and segmenter adapters')
     parser.add_argument('--decoder_depth', default=4, type=int,
                         help='Depth of decoder (for convnext and segmenter adapters')
-    parser.add_argument('--drop_path_decoder', type=float, default=0.0, metavar='PCT',
+    parser.add_argument('--drop_path_decoder', type=float, default=0.1, metavar='PCT',
                         help='Drop path rate (default: 0.0)')
     parser.add_argument('--decoder_preds_per_patch', type=int, default=64,
                         help='Predictions per patch for convnext adapter')
@@ -217,7 +217,7 @@ def get_args():
                         help='Clip gradient norm (default: None, no clipping)')
     parser.add_argument('--momentum', type=float, default=0.9, metavar='M',
                         help='SGD momentum (default: 0.9)')
-    parser.add_argument('--weight_decay', type=float, default=0.1, #testing
+    parser.add_argument('--weight_decay', type=float, default=0.5, #testing
                         help='weight decay (default: 0.05)')
     parser.add_argument('--weight_decay_end', type=float, default=None, help="""Final value of the
         weight decay. We use a cosine schedule for WD. 
@@ -271,7 +271,7 @@ def get_args():
                         help='path where to save, empty for no saving')
     parser.add_argument('--device', default='cuda',
                         help='device to use for training / testing')
-    parser.add_argument('--seed', default= 800 , type=int)
+    parser.add_argument('--seed', default= 777 , type=int)
     parser.add_argument('--resume', default='', help='resume from checkpoint')
     parser.add_argument('--auto_resume', action='store_true')
     parser.add_argument('--no_auto_resume', action='store_false', dest='auto_resume')
@@ -292,7 +292,7 @@ def get_args():
     parser.add_argument('--no_dist_eval', action='store_false', dest='dist_eval',
                     help='Disabling distributed evaluation')
     parser.set_defaults(dist_eval=False)
-    parser.add_argument('--num_workers', default=0, type=int)
+    parser.add_argument('--num_workers', default=16, type=int)
     parser.add_argument('--pin_mem', action='store_true',
                         help='Pin CPU memory in DataLoader for more efficient (sometimes) transfer to GPU.')
     parser.add_argument('--no_pin_mem', action='store_false', dest='pin_mem',
@@ -887,7 +887,7 @@ def train_one_epoch(model: torch.nn.Module, prompt_pool ,top_k,prompt_length ,
             weight_depth = raw_parameter_depth
             
             # 총 손실 계산 및 역전파
-            loss = compute_loss(seg_loss, depth_loss, weight_seg, weight_depth)
+            loss = compute_loss(seg_loss, depth_loss , weight_seg , weight_depth)
         
         total_loss = seg_loss + depth_loss
         loss_value = loss.item()
@@ -949,6 +949,12 @@ def train_one_epoch(model: torch.nn.Module, prompt_pool ,top_k,prompt_length ,
     metric_logger.synchronize_between_processes()
     print("Averaged stats:", metric_logger)
     return {'[Epoch] ' + k: meter.global_avg for k, meter in metric_logger.meters.items()}
+
+def compute_loss_RWL(seg_loss, depth_loss ) :
+    batch_weight = F.softmax(torch.randn(2), dim=-1).to('cuda')
+    loss = batch_weight[0] * seg_loss + batch_weight[1] * depth_loss
+    
+    return loss
 
 def compute_loss(seg_loss, depth_loss, weight_seg, weight_depth):
     # σ1과 σ2에 대한 역수를 계산합니다.

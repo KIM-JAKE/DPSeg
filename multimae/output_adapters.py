@@ -533,6 +533,7 @@ class ConvNeXtAdapter(nn.Module):
         self.value_projection = nn.Linear(self.dim_tokens_enc, self.dim_tokens_enc)
         
         self.out_projection = nn.Linear(self.dim_tokens_enc, self.dim_tokens_enc)
+        self.norm1 = nn.LayerNorm(self.dim_tokens_enc)
         self.norm_2 = nn.LayerNorm(self.dim_tokens_enc)
   
         self._init_weights(self.query_projection)
@@ -589,17 +590,6 @@ class ConvNeXtAdapter(nn.Module):
         N_H, N_W = H // self.patch_size, W // self.patch_size
         
         x = self.adapt_tokens(encoder_tokens, input_info)
-
-        # [2, task_specific_prompt_length, dim_tokens_enc]
-        
-        # total_prompts = 2* self.prompt_length * self.top_k
-
-        # x = x[:,total_prompts:,:]
-        
-        # expanded_prompts = self.task_specific_prompts.expand(x.size(0), -1, -1)
-        
-        # x = torch.cat([expanded_prompts, x], dim=1)
-        #attention for task specific prompts
         
         if self.not_self_attn :
             
@@ -624,11 +614,18 @@ class ConvNeXtAdapter(nn.Module):
         else : #self attention
             
             if self.num_classes == 1: #depth
-                x = torch.cat([x[:,:self.task_specific_prompt_length,:] , x[:,2*self.task_specific_prompt_length:,:]], dim = 1)
-      
+                task_original_prompts = x[:,:self.task_specific_prompt_length,:]
+                x= x[:,2*self.task_specific_prompt_length:,:]
+                x = torch.cat([x[:,:self.task_specific_prompt_length,:] , x[:,2*self.task_specific_prompt_length:,:]], dim = 1) # B , task_prompt_not_origin + image ,768
+                x[:,:self.task_specific_prompt_length,:] +=  task_original_prompts # B , task_prompt_residual + image ,768
+                x = self.norm1(x)
             elif self.num_classes == 40 :  #semseg
+                task_original_prompts = x[:,self.task_specific_prompt_length : 2*self.task_specific_prompt_length,:]
+                x= x[:,2*self.task_specific_prompt_length:,:]
                 x = torch.cat([x[:,self.task_specific_prompt_length : 2*self.task_specific_prompt_length,:] ,  x[:,2*self.task_specific_prompt_length:,:]], dim = 1)
-        
+                x[:,:self.task_specific_prompt_length,:] +=  task_original_prompts
+                x = self.norm1(x)
+                
         x_raw = x
         
         query = self.query_projection(x)
@@ -637,21 +634,21 @@ class ConvNeXtAdapter(nn.Module):
         
         scores = torch.matmul(query, key.transpose(-2, -1)) / (self.embed_dim ** 0.5)
         
-        mask = torch.zeros_like(scores)
-        mask[:, : :self.task_specific_prompt_length] = float("-1e4")
-            # 마스크 적용
-        scores = scores + mask
+        # mask = torch.zeros_like(scores)
+        # mask[:, :  ,:self.task_specific_prompt_length ] = float("-1e4")
+        # 마스크 적용
+        scores = scores 
         attn = F.softmax(scores, dim=-1)
         context = torch.matmul(attn, value)     
-
-        x = self.out_projection(context) # B x promt_length(25) x 768
+        
+        x = self.out_projection(context)
 
         x = x_raw + x
-        
-        x = (self.norm_2(x))
    
         x= x[:, self.task_specific_prompt_length :,:]
 
+        x = (self.norm_2(x))
+   
         x = self.proj_dec(x)
        
         x = rearrange(x, "b n (p c) -> b (n p) c", n=N_H * N_W, p=self.preds_per_patch, c=self.class_dim)
@@ -664,7 +661,7 @@ class ConvNeXtAdapter(nn.Module):
         x = self.final_layer(x)
             
         # Interpolate to semseg res
-        x = F.interpolate(x, size=(H, W), mode=self.interpolate_mode)
+        x = F.interpolate(x, size=(H, W), mode=self.interpolate_mode )
 
         return x
 

@@ -94,21 +94,19 @@ class MultiMAE(nn.Module):
         self.task_specific_prompt_length = task_specific_prompt_length
         self.prompt_proj = nn.Identity()
         #prompt_dropout
+        
+        self.num_global_tokens = num_global_tokens
+        self.global_tokens = nn.Parameter(torch.zeros(1, num_global_tokens, dim_tokens))
+        
         self.prompt_dropout = Dropout(self.prompt_dropout_rate)
-        
-        self.task_specific_prompts_1 = nn.Parameter(torch.rand(1,self.task_specific_prompt_length
-        ,self.dim_tokens))
-        
-        self.task_specific_prompts_2 = nn.Parameter(torch.rand(1,self.task_specific_prompt_length
-        ,self.dim_tokens))
-        
-        
-        #learnable weight
-        self.raw_parameter_seg = torch.nn.Parameter(torch.empty(1))
-        self.raw_parameter_depth = torch.nn.Parameter(torch.empty(1))
-        torch.nn.init.uniform_(self.raw_parameter_seg, a=0.2, b=1.0)
-        torch.nn.init.uniform_(self.raw_parameter_depth, a=0.2, b=1.0)
 
+        self.task_specific_prompts_1 = nn.Parameter(torch.rand(1, self.task_specific_prompt_length, self.dim_tokens))
+        self.task_specific_prompts_2 = nn.Parameter(torch.rand(1, self.task_specific_prompt_length, self.dim_tokens))  
+        trunc_normal_(self.task_specific_prompts_1, std=0.02)
+        trunc_normal_(self.task_specific_prompts_2, std=0.02)
+        #learnable weight
+        self.raw_parameter_seg = torch.nn.Parameter(torch.tensor(-0.5))
+        self.raw_parameter_depth = torch.nn.Parameter(torch.tensor(-0.5))
 
         #prompts
         # self.prompt = Prompt(length=self.prompt_length, embed_dim=self.dim_tokens, prompt_pool=self.prompt_pool,
@@ -148,9 +146,9 @@ class MultiMAE(nn.Module):
             Block(
                 dim=dim_tokens,
                 use_prompt_mask=
-                    (True if 0<= i < 3 else False),
+                    (True if (0<= i < 3) else False),
                 prompt_size=
-                    (2*self.top_k * self.prompt_length if 0<= i < 3  else 0),
+                    (2*self.top_k * self.prompt_length) if 0 <= i < 3 else 0,
                 num_heads=num_heads, 
                 mlp_ratio=mlp_ratio, 
                 qkv_bias=qkv_bias,
@@ -540,6 +538,8 @@ class MultiViT(MultiMAE):
         expanded_prompts_1 = self.task_specific_prompts_1.expand(input_tokens.size(0), -1, -1)
         expanded_prompts_2 = self.task_specific_prompts_2.expand(input_tokens.size(0), -1, -1)
         
+        original_prompts = torch.cat([expanded_prompts_1, expanded_prompts_2], dim=1)
+        
         #input_tokens = torch.cat([expanded_prompts_1,expanded_prompts_2 ,  input_tokens ], dim = 1)
         
         want_size = input_tokens.shape[1]
@@ -563,7 +563,7 @@ class MultiViT(MultiMAE):
                 
             for i, layer in enumerate(self.encoder):
                 
-                if i== 0 or i == 1  :
+                if i== 0 or i == 1  or i == 2:
                     prompt_instance = self.layer_prompt_pools[i]
 
                     now_size = input_tokens.shape[1]
@@ -573,31 +573,30 @@ class MultiViT(MultiMAE):
                     task1_tokens = torch.cat([expanded_prompts_1, input_tokens], dim = 1 )
                     task2_tokens = torch.cat([expanded_prompts_2, input_tokens], dim = 1 )
 
-                    task1_prompt_pool = prompt_instance(task1_tokens)['prompted_embedding'][:,:prompt_input_size,:]
-                    task2_prompt_pool = prompt_instance(task2_tokens)['prompted_embedding']
-                    input_tokens = torch.cat([task1_prompt_pool ,task2_prompt_pool] , dim = 1) #prompt pool *2 + input_tokens
+                    task1_prompt_pool = prompt_instance(expanded_prompts_1)['prompted_embedding'][:,:prompt_input_size,:]
+                    task2_prompt_pool = prompt_instance(expanded_prompts_2)['prompted_embedding'][:,:prompt_input_size,:]
+                    input_tokens = torch.cat([task1_prompt_pool ,task2_prompt_pool , input_tokens ] , dim = 1) #prompt pool *2 + input_tokens
                                 
 
                     input_tokens = self.prompt_dropout((input_tokens))
                     input_tokens = layer(input_tokens)  
             
-                elif i == 8 or i == 9 or i == 10 or i ==11 :
+                # elif 7 <= i < 12  :
                     
-                    now_size = input_tokens.shape[1]
-                    delete_size = now_size - want_size 
-                    input_tokens = input_tokens[:, delete_size:, :] 
-                    input_tokens = torch.cat([expanded_prompts_1 , expanded_prompts_2 ,  input_tokens ], dim = 1)
-                    
-                    input_tokens = self.prompt_dropout((input_tokens))
-                    input_tokens = layer(input_tokens)
-            
+                #     now_size = input_tokens.shape[1]
+                #     delete_size = now_size - want_size 
+                #     input_tokens = input_tokens[:, delete_size:, :] 
+                #     input_tokens = torch.cat([expanded_prompts_1 , expanded_prompts_2 ,  input_tokens ], dim = 1)
+                #     input_tokens = self.prompt_dropout((input_tokens))
+                #     input_tokens = layer(input_tokens)
+  
                 else:
                     now_size = input_tokens.shape[1]
                     delete_size = now_size - want_size 
                     input_tokens = input_tokens[:, delete_size:, :] 
                     input_tokens = layer(input_tokens)
             
-            encoder_tokens =  input_tokens
+            encoder_tokens =  torch.cat([original_prompts ,expanded_prompts_1,expanded_prompts_2, input_tokens] , dim = 1 ) 
             
         # Decode tokens for each task using task-specific output adapters
         preds = {

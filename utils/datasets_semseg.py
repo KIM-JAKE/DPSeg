@@ -12,7 +12,7 @@
 # https://github.com/BUPT-PRIV/MAE-priv
 # --------------------------------------------------------
 from typing import Dict, Tuple
-
+import random
 import numpy as np
 import torch
 
@@ -28,6 +28,29 @@ from utils import (IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD, PAD_MASK_VALUE,
                    SEG_IGNORE_INDEX)
 
 from .dataset_folder import ImageFolder, MultiTaskImageFolder
+
+class RandomScaleCrop(object):
+    def __init__(self, scale=[1.0, 1.2, 1.5, 1.8, 2.0]):
+        self.scale = scale
+
+    def __call__(self, img):
+        if torch.rand(1) < 0.5: 
+            height, width = img.shape[-2:]
+            sc = self.scale[random.randint(0, len(self.scale) - 1)]
+            h, w = int(height / sc), int(width / sc)
+            i = random.randint(0, height - h)
+            j = random.randint(0, width - w)
+            img_ = F.interpolate(img[None, :, i:i + h, j:j + w], size=(height, width), mode='bilinear',align_corners=True).squeeze(0)
+            return img_
+        return img_
+
+def apply_random_scale_crop(image,**kwargs):
+    if isinstance(image, np.ndarray):
+        image = torch.from_numpy(image).float()  # float 타입으로 변환하는 것이 좋음
+
+    transformer = RandomScaleCrop()
+    image = transformer(image)
+    return image.numpy()
 
 
 def simple_transform(train: bool,
@@ -53,14 +76,12 @@ def simple_transform(train: bool,
      """
 
     if train:
+        
         transform = A.Compose([
-            A.Resize(input_size , input_size),
-            A.ShiftScaleRotate(shift_limit=0.2, scale_limit=0.2, rotate_limit=30, p=0.5),
-            A.RGBShift(r_shift_limit=25, g_shift_limit=25, b_shift_limit=25, p=0.5),
-            A.RandomBrightnessContrast(brightness_limit=0.3, contrast_limit=0.3, p=0.5),
+            # A.Lambda(image=apply_random_scale_crop) ,
             A.HorizontalFlip(p=0.5),
             A.LongestMaxSize(max_size=input_size, p=1),
-            A.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.2, hue=0.1, p=0.5),  # Color jittering from MoCo-v3 / DINO
+            # A.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.2, hue=0.1, p=0.3),  # Color jittering from MoCo-v3 / DINO
             A.RandomScale(scale_limit=(0.1 - 1, 2.0 - 1), p=0.5),  # This is LSJ (0.1, 2.0)
             A.PadIfNeeded(min_height=input_size, min_width=input_size,
                           position=A.augmentations.PadIfNeeded.PositionType.TOP_LEFT,
