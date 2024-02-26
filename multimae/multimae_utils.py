@@ -178,7 +178,10 @@ class Attention(nn.Module):
           # 마스크 생성: 프롬프트는 이미지에 영향을 주지 않도록 설정
         if self.use_prompt_mask :
             mask = torch.zeros_like(attn)
-            mask[:, :, self.prompt_size : ,  :self.prompt_size] = float("-1e4")
+            mask[:, :, :self.prompt_size , self.prompt_size : 2* self.prompt_size] = float("-1e4")
+            mask[:, :, self.prompt_size: 2* self.prompt_size , :self.prompt_size] = float("-1e4")
+            mask[:, :, 2 * self.prompt_size : , : 2 * self.prompt_size] = float("-1e4")
+            
             # 마스크 적용
             attn = attn + mask
           # 어텐션 가중치 계산 및 적용        

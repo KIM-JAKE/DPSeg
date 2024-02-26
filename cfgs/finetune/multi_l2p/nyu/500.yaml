@@ -20,8 +20,8 @@ decoder_depth: 4
 # Train
 epochs: 600
 opt: adamw
-lr: 0.0001 # = 1e-4
-warmup_lr: 0.000001 # = 1e-6
+lr: 0.00001 # = 1e-4
+warmup_lr: 0.0000001 # = 1e-6
 min_lr: 0.000001
 warmup_epochs: 1
 batch_size: 16
@@ -51,7 +51,7 @@ prompt_deep : True
 top_k : 10
 size : 30
 length : 2
-task_specific_prompt_length : 100
+task_specific_prompt_length : 300
 not_self_attn : False
 use_prompt_mask : True
 
@@ -62,4 +62,4 @@ wandb_entity: null # Change if needed
 wandb_run_name: 'Test_Masking_inter_prompt_mask'
 log_images_wandb: False
 log_images_freq: 20
-output_dir: '/root/workspace/Results/task_specific_prompt=100-lr=0.0001'
+output_dir: '/root/workspace/Results/task_specific_prompt=300-lr=0.00001'

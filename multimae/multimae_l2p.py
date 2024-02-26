@@ -13,7 +13,7 @@
 # https://github.com/BUPT-PRIV/MAE-priv
 # https://github.com/facebookresearch/mae
 # --------------------------------------------------------
-
+import matplotlib.pyplot as plt
 import itertools
 import math
 from collections import OrderedDict
@@ -102,8 +102,13 @@ class MultiMAE(nn.Module):
 
         self.task_specific_prompts_1 = nn.Parameter(torch.rand(1, self.task_specific_prompt_length, self.dim_tokens))
         self.task_specific_prompts_2 = nn.Parameter(torch.rand(1, self.task_specific_prompt_length, self.dim_tokens))  
-        trunc_normal_(self.task_specific_prompts_1, std=0.02)
-        trunc_normal_(self.task_specific_prompts_2, std=0.02)
+        
+        # 첫 번째 프롬프트는 -1.0에서 1.0 사이의 값으로 초기화
+        nn.init.uniform_(self.task_specific_prompts_1, a=-1.0, b=1.0)
+
+        # 두 번째 프롬프트는 -0.01에서 0.01 사이의 매우 작은 값으로 초기화
+        nn.init.uniform_(self.task_specific_prompts_2, a=-0.01, b=0.01)
+        
         #learnable weight
         self.raw_parameter_seg = torch.nn.Parameter(torch.tensor(-0.5))
         self.raw_parameter_depth = torch.nn.Parameter(torch.tensor(-0.5))
@@ -136,19 +141,16 @@ class MultiMAE(nn.Module):
         else:
             self.output_adapters = None
         # Additional learnable tokens that can be used by encoder to process/store global information
-        self.num_global_tokens = num_global_tokens
-        self.global_tokens = nn.Parameter(torch.zeros(1, num_global_tokens, dim_tokens))
-        trunc_normal_(self.global_tokens, std=0.02)
-        
+
         # Transformer encoder
         dpr = [x.item() for x in torch.linspace(0, drop_path_rate, depth)]  # stochastic depth decay rule
         self.encoder = nn.Sequential(*[
             Block(
                 dim=dim_tokens,
                 use_prompt_mask=
-                    (True if (0<= i < 3) else False),
+                    (True if ( 0<= i < 3 )  or ( 6 <= i < 12 ) else False),
                 prompt_size=
-                    (2*self.top_k * self.prompt_length) if 0 <= i < 3 else 0,
+                    (self.top_k * self.prompt_length if 0 <= i < 3 else self.task_specific_prompt_length if 6 <= i < 12  else 0),
                 num_heads=num_heads, 
                 mlp_ratio=mlp_ratio, 
                 qkv_bias=qkv_bias,
@@ -520,9 +522,30 @@ class MultiViT(MultiMAE):
 
         input_info = self.generate_input_info(input_task_tokens, image_size=(H, W))
         input_tokens = torch.cat([task_tokens for task_tokens in input_task_tokens.values()], dim=1)
-
+        
         return input_tokens, input_info 
 
+    def plot_index_distribution(self, seg_idx_list, depth_idx_list, title , filename):
+        # Segmentation 태스크의 인덱스 분포
+        plt.figure(figsize=(12, 6))
+        plt.subplot(1, 2, 1)
+        plt.hist(seg_idx_list.cpu().numpy().flatten(), bins=range(self.pool_size + 1), alpha=0.7, label='Seg')
+        plt.title('Segmentation Task Prompt Index Distribution')
+        plt.xlabel('Index')
+        plt.ylabel('Frequency')
+        
+        # Depth 태스크의 인덱스 분포
+        plt.subplot(1, 2, 2)
+        plt.hist(depth_idx_list.cpu().numpy().flatten(), bins=range(self.pool_size + 1), alpha=0.7, label='Depth')
+        plt.title('Depth Task Prompt Index Distribution')
+        plt.xlabel('Index')
+        plt.ylabel('Frequency')
+        
+        plt.suptitle(title)
+        plt.legend()
+        plt.savefig(filename)
+        plt.close()
+        
     def forward(self, x: Union[Dict[str, torch.Tensor], torch.Tensor], return_all_layers=False, **kwargs):
         """
         Forward pass through input adapters, transformer encoder and output adapters.
@@ -530,11 +553,12 @@ class MultiViT(MultiMAE):
         :param x: Input tensor or dictionary of tensors
         :param return_all_layers: Set to True to return all transformer layers
         """
-
+        
         input_tokens, input_info  = self.process_input(x)
         
         prompt_input_size = self.top_k * self.prompt_length 
         
+        global_tokens = self.global_tokens.expand(input_tokens.size(0), -1, -1)
         expanded_prompts_1 = self.task_specific_prompts_1.expand(input_tokens.size(0), -1, -1)
         expanded_prompts_2 = self.task_specific_prompts_2.expand(input_tokens.size(0), -1, -1)
         
@@ -563,32 +587,40 @@ class MultiViT(MultiMAE):
                 
             for i, layer in enumerate(self.encoder):
                 
-                if i== 0 or i == 1  or i == 2:
+                if  0 <= i < 3 :
                     prompt_instance = self.layer_prompt_pools[i]
 
                     now_size = input_tokens.shape[1]
                     delete_size = now_size - want_size 
                     input_tokens = input_tokens[:, delete_size:, :] 
                     
-                    task1_tokens = torch.cat([expanded_prompts_1, input_tokens], dim = 1 )
-                    task2_tokens = torch.cat([expanded_prompts_2, input_tokens], dim = 1 )
+                    task1_tokens = torch.cat([expanded_prompts_1 , global_tokens ], dim = 1 )
+                    task2_tokens = torch.cat([expanded_prompts_2 ,  global_tokens], dim = 1 )
 
-                    task1_prompt_pool = prompt_instance(expanded_prompts_1)['prompted_embedding'][:,:prompt_input_size,:]
-                    task2_prompt_pool = prompt_instance(expanded_prompts_2)['prompted_embedding'][:,:prompt_input_size,:]
+                    task1_prompt_pool = prompt_instance( task1_tokens)['prompted_embedding'][:,:prompt_input_size,:]
+                    task2_prompt_pool = prompt_instance( task2_tokens)['prompted_embedding'][:,:prompt_input_size,:]
+                    
+                    depth_idx_list = prompt_instance( task1_tokens)['prompt_idx']
+                    seg_idx_list  = prompt_instance( task2_tokens)['prompt_idx']
+                    
+                    #Plot which idx selected
+                    
+                    #self.plot_index_distribution(seg_idx_list[i], depth_idx_list[i], title=f'Layer {i} Prompt Index Distribution', filename=f'layer_{i}_distribution.png')
+                    
                     input_tokens = torch.cat([task1_prompt_pool ,task2_prompt_pool , input_tokens ] , dim = 1) #prompt pool *2 + input_tokens
                                 
 
                     input_tokens = self.prompt_dropout((input_tokens))
                     input_tokens = layer(input_tokens)  
             
-                # elif 7 <= i < 12  :
+                elif 6 <= i < 12 :
                     
-                #     now_size = input_tokens.shape[1]
-                #     delete_size = now_size - want_size 
-                #     input_tokens = input_tokens[:, delete_size:, :] 
-                #     input_tokens = torch.cat([expanded_prompts_1 , expanded_prompts_2 ,  input_tokens ], dim = 1)
-                #     input_tokens = self.prompt_dropout((input_tokens))
-                #     input_tokens = layer(input_tokens)
+                    now_size = input_tokens.shape[1]
+                    delete_size = now_size - want_size 
+                    input_tokens = input_tokens[:, delete_size:, :] 
+                    input_tokens = torch.cat([expanded_prompts_1 , expanded_prompts_2 ,  input_tokens ], dim = 1)
+                    input_tokens = self.prompt_dropout((input_tokens))
+                    input_tokens = layer(input_tokens)
   
                 else:
                     now_size = input_tokens.shape[1]
@@ -596,7 +628,7 @@ class MultiViT(MultiMAE):
                     input_tokens = input_tokens[:, delete_size:, :] 
                     input_tokens = layer(input_tokens)
             
-            encoder_tokens =  torch.cat([original_prompts ,expanded_prompts_1,expanded_prompts_2, input_tokens] , dim = 1 ) 
+            encoder_tokens =  torch.cat([original_prompts ,  input_tokens] , dim = 1 ) 
             
         # Decode tokens for each task using task-specific output adapters
         preds = {

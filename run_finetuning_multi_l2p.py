@@ -184,7 +184,7 @@ def get_args():
                         help='base patch size for image-like modalities')
     parser.add_argument('--input_size', default=512, type=int,
                         help='images input size for backbone')
-    parser.add_argument('--drop_path_encoder', type=float, default=0.0, metavar='PCT',
+    parser.add_argument('--drop_path_encoder', type=float, default=0.0001, metavar='PCT',
                         help='Drop path rate (default: 0.1)')
     parser.add_argument('--learnable_pos_emb', action='store_true',
                         help='Makes the positional embedding learnable')
@@ -198,7 +198,7 @@ def get_args():
                         help='Token dimension for the decoder layers, for convnext and segmenter adapters')
     parser.add_argument('--decoder_depth', default=4, type=int,
                         help='Depth of decoder (for convnext and segmenter adapters')
-    parser.add_argument('--drop_path_decoder', type=float, default=0.1, metavar='PCT',
+    parser.add_argument('--drop_path_decoder', type=float, default=0.0001, metavar='PCT',
                         help='Drop path rate (default: 0.0)')
     parser.add_argument('--decoder_preds_per_patch', type=int, default=64,
                         help='Predictions per patch for convnext adapter')

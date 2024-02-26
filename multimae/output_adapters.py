@@ -477,7 +477,51 @@ class SegmenterMaskTransformerAdapter(nn.Module):
 
         return masks
 
+class CrossMultiHeadAttention(nn.Module):
+    def __init__(self, embed_dim, num_heads):
+        super(CrossMultiHeadAttention, self).__init__()
+        self.embed_dim = embed_dim
+        self.num_heads = num_heads
+        self.head_dim = embed_dim // num_heads
 
+        # 쿼리, 키, 값에 대한 프로젝션을 위한 선형 레이어
+        self.query_projection = nn.Linear(embed_dim, embed_dim)
+        self.key_projection = nn.Linear(embed_dim, embed_dim)
+        self.value_projection = nn.Linear(embed_dim, embed_dim)
+
+        # 최종 출력을 위한 선형 레이어
+        self.final_linear = nn.Linear(embed_dim, embed_dim)
+        
+        # 레이어 정규화
+        self.layer_norm = nn.LayerNorm(embed_dim)
+
+    def forward(self, query_seq, key_value_seq ):
+        batch_size = query_seq.size(0)
+        
+        # 쿼리, 키, 값 프로젝션
+        query = self.query_projection(query_seq).view(batch_size, -1, self.num_heads, self.head_dim).transpose(1, 2)
+        key = self.key_projection(key_value_seq).view(batch_size, -1, self.num_heads, self.head_dim).transpose(1, 2)
+        value = self.value_projection(key_value_seq).view(batch_size, -1, self.num_heads, self.head_dim).transpose(1, 2)
+        
+        
+        # 스케일드 닷 프로덕트 어텐션
+        scores = torch.matmul(query, key.transpose(-2, -1)) / (self.head_dim ** 0.5)
+        
+        # mask = torch.zeros_like(scores)
+        # mask[:, :, :prompt_size, :prompt_size] = float("-inf")
+        
+        scores = scores  
+        attn = F.softmax(scores, dim=-1)
+
+        # 어텐션 적용
+        context = torch.matmul(attn, value).transpose(1, 2).contiguous().view(batch_size, -1, self.embed_dim)
+        
+        # 최종 선형 레이어 및 Add & Norm
+        output = self.final_linear(context)
+        output = self.layer_norm(output + query_seq)
+        
+        return output
+    
 class ConvNeXtAdapter(nn.Module):
     """Output adapter with ConvNext blocks for semantic segmentation
 
@@ -528,19 +572,9 @@ class ConvNeXtAdapter(nn.Module):
         self.not_self_attn = not_self_attn
         
         #For attention (prompt pool + task specific prompt)
-        self.query_projection = nn.Linear(self.dim_tokens_enc, self.dim_tokens_enc)
-        self.key_projection = nn.Linear(self.dim_tokens_enc, self.dim_tokens_enc)
-        self.value_projection = nn.Linear(self.dim_tokens_enc, self.dim_tokens_enc)
-        
-        self.out_projection = nn.Linear(self.dim_tokens_enc, self.dim_tokens_enc)
+        self.self_attention1 = CrossMultiHeadAttention(embed_dim= self.dim_tokens_enc , num_heads= 8 )
+     
         self.norm1 = nn.LayerNorm(self.dim_tokens_enc)
-        self.norm_2 = nn.LayerNorm(self.dim_tokens_enc)
-  
-        self._init_weights(self.query_projection)
-        self._init_weights(self.key_projection)
-        self._init_weights(self.value_projection)
-        self._init_weights(self.out_projection)
-              
         #blocks
         self.blocks = nn.Sequential(*[
             ConvNeXtBlock(dim=self.class_dim)
@@ -617,38 +651,19 @@ class ConvNeXtAdapter(nn.Module):
                 task_original_prompts = x[:,:self.task_specific_prompt_length,:]
                 x= x[:,2*self.task_specific_prompt_length:,:]
                 x = torch.cat([x[:,:self.task_specific_prompt_length,:] , x[:,2*self.task_specific_prompt_length:,:]], dim = 1) # B , task_prompt_not_origin + image ,768
-                x[:,:self.task_specific_prompt_length,:] +=  task_original_prompts # B , task_prompt_residual + image ,768
+                x[:,:self.task_specific_prompt_length,:] +=  task_original_prompts
+                # B , task_prompt_residual + image ,768
                 x = self.norm1(x)
             elif self.num_classes == 40 :  #semseg
                 task_original_prompts = x[:,self.task_specific_prompt_length : 2*self.task_specific_prompt_length,:]
                 x= x[:,2*self.task_specific_prompt_length:,:]
+
                 x = torch.cat([x[:,self.task_specific_prompt_length : 2*self.task_specific_prompt_length,:] ,  x[:,2*self.task_specific_prompt_length:,:]], dim = 1)
                 x[:,:self.task_specific_prompt_length,:] +=  task_original_prompts
                 x = self.norm1(x)
-                
-        x_raw = x
-        
-        query = self.query_projection(x)
-        key = self.key_projection(x)
-        value = self.value_projection(x)
-        
-        scores = torch.matmul(query, key.transpose(-2, -1)) / (self.embed_dim ** 0.5)
-        
-        # mask = torch.zeros_like(scores)
-        # mask[:, :  ,:self.task_specific_prompt_length ] = float("-1e4")
-        # 마스크 적용
-        scores = scores 
-        attn = F.softmax(scores, dim=-1)
-        context = torch.matmul(attn, value)     
-        
-        x = self.out_projection(context)
-
-        x = x_raw + x
-   
-        x= x[:, self.task_specific_prompt_length :,:]
-
-        x = (self.norm_2(x))
-   
+       
+        x = self.self_attention1(x,x)
+        x= x[:,self.task_specific_prompt_length:,:]
         x = self.proj_dec(x)
        
         x = rearrange(x, "b n (p c) -> b (n p) c", n=N_H * N_W, p=self.preds_per_patch, c=self.class_dim)

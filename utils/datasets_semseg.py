@@ -80,14 +80,16 @@ def simple_transform(train: bool,
         transform = A.Compose([
             # A.Lambda(image=apply_random_scale_crop) ,
             A.HorizontalFlip(p=0.5),
+            A.Equalize(always_apply=False, p=0.5, mode='cv', by_channels=False) ,
+            A.GaussNoise(always_apply=False, p=0.5, var_limit=(0.0, 26.849998474121094)) ,
             A.LongestMaxSize(max_size=input_size, p=1),
-            # A.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.2, hue=0.1, p=0.3),  # Color jittering from MoCo-v3 / DINO
+            # A.ColorJitter(brightness=0.1, contrast=0.05, saturation=0.02, hue=0.02, p=0.5),  # Color jittering from MoCo-v3 / DINO
             A.RandomScale(scale_limit=(0.1 - 1, 2.0 - 1), p=0.5),  # This is LSJ (0.1, 2.0)
             A.PadIfNeeded(min_height=input_size, min_width=input_size,
                           position=A.augmentations.PadIfNeeded.PositionType.TOP_LEFT,
                           border_mode=cv2.BORDER_CONSTANT,
                           value=pad_value, mask_value=pad_mask_value),
-            A.RandomCrop(height=input_size, width=input_size, p=1),
+            A.Resize(height=input_size, width=input_size, p=1),
             A.Normalize(mean=IMAGENET_DEFAULT_MEAN, std=IMAGENET_DEFAULT_STD),
             ToTensorV2(),
         ], additional_targets=additional_targets)
@@ -99,6 +101,7 @@ def simple_transform(train: bool,
                           position=A.augmentations.PadIfNeeded.PositionType.TOP_LEFT,
                           border_mode=cv2.BORDER_CONSTANT,
                           value=pad_value, mask_value=pad_mask_value),
+            
             A.Normalize(mean=IMAGENET_DEFAULT_MEAN, std=IMAGENET_DEFAULT_STD),
             ToTensorV2(),
         ], additional_targets=additional_targets)

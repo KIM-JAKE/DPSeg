@@ -5,28 +5,29 @@ finetune:  "/root/datasets/multimae-b_98_rgb+-depth-semseg_1600e_multivit-afff3f
 
 # Input tasks
 in_domains: rgb
+seed : 777 
 
 # Architecture
 model: multivit_base
 patch_size: 16
 num_global_tokens: 0
-drop_path_encoder: 0.1
+drop_path_encoder: 0.00
 output_adapter: convnext
 decoder_dim: 6144
 decoder_preds_per_patch: 16
 decoder_depth: 4
 
 # Train
-epochs: 1000
+epochs: 600
 opt: adamw
-lr: 0.000075 # = 1e-4
-warmup_lr: 0.00000075 # = 1e-6
-min_lr: 0.
+lr: 0.0001 # = 1e-4
+warmup_lr: 0.000001 # = 1e-6
+min_lr: 0.000001
 warmup_epochs: 1
-batch_size: 11
+batch_size: 16
 input_size: 336
 layer_decay: 0.9
-
+weight_decay: 0.000001
 # Augmentation
 aug_name: simple
 
@@ -37,7 +38,7 @@ num_classes: 40
 dataset_name: nyu
 dist_eval: True
 seg_reduce_zero_label: True
-eval_freq: 15
+eval_freq: 10
 
 # Misc.
 find_unused_params: False
@@ -47,17 +48,18 @@ prompt_mode : deep
 prompt_pool : True
 prompt_shallow : False
 prompt_deep : True
-top_k : 5
-size : 10
-length : 20
+top_k : 10
+size : 30
+length : 2
 task_specific_prompt_length : 200
 not_self_attn : False
+use_prompt_mask : True
 
-# Wandb and logging
+# Wandb and l0ogging
 log_wandb: True # Set to True to log to Weights & Biases
-wandb_project:  'multimae-multi-l2p-deep'
+wandb_project:  'multimae-multi-l2p-deep-TTTT'
 wandb_entity: null # Change if needed
-wandb_run_name: 'Pool_default_deep_with_task_specific_from_encoder(200)_concatted_self_attention'
+wandb_run_name: 'Test_Masking_inter_prompt_mask'
 log_images_wandb: False
 log_images_freq: 20
-output_dir: '/root/workspace/Results/-pool_defalut_task_specific_prompt_from_encoder'
+output_dir: '/root/workspace/Results/task_specific_prompt=200-lr=0.0001'
