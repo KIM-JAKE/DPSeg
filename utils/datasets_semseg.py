@@ -15,7 +15,7 @@ from typing import Dict, Tuple
 import random
 import numpy as np
 import torch
-
+from torchvision import datasets, transforms
 try:
     import albumentations as A
     from albumentations.pytorch import ToTensorV2
@@ -30,7 +30,7 @@ from utils import (IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD, PAD_MASK_VALUE,
 from .dataset_folder import ImageFolder, MultiTaskImageFolder
 
 class RandomScaleCrop(object):
-    def __init__(self, scale=[1.0, 1.2, 1.5, 1.8, 2.0]):
+    def __init__(self, scale=[1.0, 1.2, 1.5]):
         self.scale = scale
 
     def __call__(self, img):
@@ -42,7 +42,7 @@ class RandomScaleCrop(object):
             j = random.randint(0, width - w)
             img_ = F.interpolate(img[None, :, i:i + h, j:j + w], size=(height, width), mode='bilinear',align_corners=True).squeeze(0)
             return img_
-        return img_
+        return img
 
 def apply_random_scale_crop(image,**kwargs):
     if isinstance(image, np.ndarray):
@@ -80,8 +80,6 @@ def simple_transform(train: bool,
         transform = A.Compose([
             # A.Lambda(image=apply_random_scale_crop) ,
             A.HorizontalFlip(p=0.5),
-            A.Equalize(always_apply=False, p=0.5, mode='cv', by_channels=False) ,
-            A.GaussNoise(always_apply=False, p=0.5, var_limit=(0.0, 26.849998474121094)) ,
             A.LongestMaxSize(max_size=input_size, p=1),
             # A.ColorJitter(brightness=0.1, contrast=0.05, saturation=0.02, hue=0.02, p=0.5),  # Color jittering from MoCo-v3 / DINO
             A.RandomScale(scale_limit=(0.1 - 1, 2.0 - 1), p=0.5),  # This is LSJ (0.1, 2.0)
@@ -107,6 +105,7 @@ def simple_transform(train: bool,
         ], additional_targets=additional_targets)
 
     return transform
+
 
 
 def jake_transform(train: bool,

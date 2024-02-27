@@ -495,7 +495,7 @@ class CrossMultiHeadAttention(nn.Module):
         # 레이어 정규화
         self.layer_norm = nn.LayerNorm(embed_dim)
 
-    def forward(self, query_seq, key_value_seq ):
+    def forward(self, query_seq, key_value_seq ,prompt_size):
         batch_size = query_seq.size(0)
         
         # 쿼리, 키, 값 프로젝션
@@ -507,10 +507,10 @@ class CrossMultiHeadAttention(nn.Module):
         # 스케일드 닷 프로덕트 어텐션
         scores = torch.matmul(query, key.transpose(-2, -1)) / (self.head_dim ** 0.5)
         
-        # mask = torch.zeros_like(scores)
-        # mask[:, :, :prompt_size, :prompt_size] = float("-inf")
+        mask = torch.zeros_like(scores)
+        mask[:, :, prompt_size:, :prompt_size] = float("-inf")
         
-        scores = scores  
+        scores = scores + mask
         attn = F.softmax(scores, dim=-1)
 
         # 어텐션 적용
@@ -662,7 +662,7 @@ class ConvNeXtAdapter(nn.Module):
                 x[:,:self.task_specific_prompt_length,:] +=  task_original_prompts
                 x = self.norm1(x)
        
-        x = self.self_attention1(x,x)
+        x = self.self_attention1(x,x,self.task_specific_prompt_length)
         x= x[:,self.task_specific_prompt_length:,:]
         x = self.proj_dec(x)
        

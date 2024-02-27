@@ -171,7 +171,7 @@ def create_optimizer(args, model, get_num_layer=None, get_layer_scale=None, filt
     elif opt_lower == 'adam':
         optimizer = optim.Adam(parameters, **opt_args)
     elif opt_lower == 'adamw':
-        optimizer = optim.AdamW(parameters, **opt_args)
+        optimizer = optim.AdamW(parameters, **opt_args, amsgrad=True)
     else:
         assert False and "Invalid optimizer"
         raise ValueError

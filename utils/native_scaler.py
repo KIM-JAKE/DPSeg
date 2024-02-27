@@ -18,16 +18,17 @@ class NativeScalerWithGradNormCount:
  
             self._scaler = torch.cuda.amp.GradScaler(enabled=enabled)
  
-    def __call__(self, loss, optimizer, clip_grad= 30 , skip_grad=None, parameters=None, create_graph= False, update_grad=True):
+    def __call__(self, loss, optimizer, clip_grad= 0.0 , skip_grad=None, parameters=None, create_graph= False, update_grad=True):
         
         self._scaler.scale(loss).backward(create_graph=create_graph)
-            
+
         if update_grad:
             if clip_grad is not None:
                 assert parameters is not None
                 self._scaler.unscale_(optimizer)
                 # unscale the gradients of optimizer's assigned params in-place
                 norm = torch.nn.utils.clip_grad_norm_(parameters, clip_grad)
+                
             elif skip_grad is not None:
                 self._scaler.unscale_(optimizer)
                 norm = get_grad_norm_(parameters)

@@ -51,6 +51,38 @@ from utils.pos_embed import interpolate_pos_embed_multimae
 from utils.semseg_metrics import mean_iou
 #for test new git 
 
+class DiceLoss(torch.nn.Module):
+    def __init__(self):
+        super(DiceLoss, self).__init__()
+        
+    def one_hot_encoding(self, target, num_classes):
+        # target: [batch_size, height, width], 예상되는 값은 0부터 num_classes-1까지의 정수
+        # num_classes: 클래스의 총 개수
+        target = torch.where(target == 255, torch.zeros_like(target), target)
+        batch_size, height, width = target.size()
+        one_hot = torch.zeros(batch_size, num_classes, height, width, device=target.device)
+        one_hot = one_hot.scatter_(1, target.unsqueeze(1), 1)
+        return one_hot
+    
+    def forward(self, pred, target):
+        target = self.one_hot_encoding(target, 40)
+        
+        smooth = 1.
+        
+        # pred와 target이 동일한 크기인지 확인
+        if pred.size() != target.size():
+            raise ValueError("pred와 target의 크기가 일치하지 않습니다. pred의 크기: {}, target의 크기: {}".format(pred.size(), target.size()))
+        
+        iflat = pred.contiguous().view(-1)
+        tflat = target.contiguous().view(-1)
+        
+        intersection = (iflat * tflat).sum()
+        
+        A_sum = torch.sum(iflat * iflat)
+        B_sum = torch.sum(tflat * tflat)
+        
+        return 1 - ((2. * intersection + smooth) / (A_sum + B_sum + smooth))
+
 def masked_mse_loss(preds, target, mask_valid=None):
     if mask_valid is None:
         mask_valid = torch.ones_like(preds).bool()
@@ -184,7 +216,7 @@ def get_args():
                         help='base patch size for image-like modalities')
     parser.add_argument('--input_size', default=512, type=int,
                         help='images input size for backbone')
-    parser.add_argument('--drop_path_encoder', type=float, default=0.0001, metavar='PCT',
+    parser.add_argument('--drop_path_encoder', type=float, default=0.0, metavar='PCT',
                         help='Drop path rate (default: 0.1)')
     parser.add_argument('--learnable_pos_emb', action='store_true',
                         help='Makes the positional embedding learnable')
@@ -198,7 +230,7 @@ def get_args():
                         help='Token dimension for the decoder layers, for convnext and segmenter adapters')
     parser.add_argument('--decoder_depth', default=4, type=int,
                         help='Depth of decoder (for convnext and segmenter adapters')
-    parser.add_argument('--drop_path_decoder', type=float, default=0.0001, metavar='PCT',
+    parser.add_argument('--drop_path_decoder', type=float, default=0.0, metavar='PCT',
                         help='Drop path rate (default: 0.0)')
     parser.add_argument('--decoder_preds_per_patch', type=int, default=64,
                         help='Predictions per patch for convnext adapter')
@@ -213,7 +245,7 @@ def get_args():
                         help='Optimizer Epsilon (default: 1e-8)')
     parser.add_argument('--opt_betas', default=[0.9, 0.999], type=float, nargs='+', metavar='BETA',
                         help='Optimizer Betas (default: None, use opt default)')
-    parser.add_argument('--clip_grad', type=float, default= 30 , metavar='NORM',
+    parser.add_argument('--clip_grad', type=float, default=0.000001 , metavar='NORM',
                         help='Clip gradient norm (default: None, no clipping)')
     parser.add_argument('--momentum', type=float, default=0.9, metavar='M',
                         help='SGD momentum (default: 0.9)')
@@ -304,7 +336,7 @@ def get_args():
 
     parser.add_argument('--fp16', action='store_true')
     parser.add_argument('--no_fp16', action='store_false', dest='fp16')
-    parser.set_defaults(fp16=True)
+    parser.set_defaults(fp16= True )
 
     # Wandb logging
     parser.add_argument('--log_wandb', default=True, action='store_true',
@@ -339,8 +371,8 @@ def get_args():
     parser.add_argument('--use_prompt_mask', default=False, type=bool)
     parser.add_argument('--shared_prompt_pool', default=False, type=bool)
     parser.add_argument('--shared_prompt_key', default=False, type=bool)
-    parser.add_argument('--batchwise_prompt', default=True, type=bool)
-    parser.add_argument('--embedding_key', default='mean_max', type=str)
+    parser.add_argument('--batchwise_prompt', default=False, type=bool)
+    parser.add_argument('--embedding_key', default='max', type=str)
     parser.add_argument('--predefined_key', default='', type=str)
     parser.add_argument('--pull_constraint', default=True)
     parser.add_argument('--pull_constraint_coeff', default=0.1, type=float)
@@ -440,7 +472,7 @@ def main(args):
             batch_size=args.batch_size,
             num_workers=args.num_workers,
             pin_memory=args.pin_mem,
-            drop_last=True
+            drop_last= False
         )
     else:
         data_loader_val = None
@@ -673,7 +705,7 @@ def main(args):
     max_miou = 0.0
     max_delta_1  = 0.0
     
-    early_stopping_epochs = 5
+    early_stopping_epochs = 30
     best_miou = 0.0
     best_delta_1 = 0.0
     early_stop_counter = 0
@@ -696,11 +728,6 @@ def main(args):
         
         raw_parameter_seg = model.raw_parameter_seg
         raw_parameter_depth = model.raw_parameter_depth
-
-        print("=============================================")
-        print('weight_seg : ' , raw_parameter_seg.item() , "weight_depth : ", raw_parameter_depth.item())
-        print("=============================================")
-
 
         if args.output_dir and args.save_ckpt:
             if (epoch + 1) % args.save_ckpt_freq == 0 or epoch + 1 == args.epochs:
@@ -739,7 +766,6 @@ def main(args):
             else:
                 max_miou = best_miou
                 max_delta_1 = best_delta_1
-                early_stop_counter = 0
 
             # 조기 종료 조건 확인
             if early_stop_counter >= early_stopping_epochs:
@@ -798,6 +824,7 @@ def train_one_epoch(model: torch.nn.Module, prompt_pool ,top_k,prompt_length ,
                     lr_schedule_values=None, wd_schedule_values=None, in_domains=None, fp16=True,
                     return_all_layers=False, standardize_depth=True, log_images=False):
     model.train()
+    optimizer.zero_grad()
     metric_logger = utils.MetricLogger(delimiter="  ")
     metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
     metric_logger.add_meter('min_lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
@@ -822,7 +849,7 @@ def train_one_epoch(model: torch.nn.Module, prompt_pool ,top_k,prompt_length ,
             task: tensor.to(device, non_blocking=True)
             for task, tensor in x.items()
         }
-
+        
         input_dict = {
             task: tensor
             for task, tensor in tasks_dict.items()
@@ -870,12 +897,10 @@ def train_one_epoch(model: torch.nn.Module, prompt_pool ,top_k,prompt_length ,
             seg_loss = 0
             if 'semseg' in tasks_dict:
                 seg_pred, seg_gt = preds['semseg'], tasks_dict['semseg']
-                seg_loss = criterion(seg_pred, seg_gt) / 336
+                seg_loss = criterion(seg_pred, seg_gt) / 224
                 
             raw_parameter_seg = model.raw_parameter_seg
             raw_parameter_depth = model.raw_parameter_depth
-
-            optimizer.zero_grad()
 
             # 뎁스 손실 계산
             depth_loss = 0
@@ -887,7 +912,8 @@ def train_one_epoch(model: torch.nn.Module, prompt_pool ,top_k,prompt_length ,
             weight_depth = raw_parameter_depth
             
             # 총 손실 계산 및 역전파
-            loss = compute_loss(seg_loss, depth_loss , weight_seg , weight_depth)
+            loss = compute_loss_RWL(seg_loss, depth_loss )
+            # loss = compute_loss(seg_loss, depth_loss , weight_seg , weight_depth)
         
         total_loss = seg_loss + depth_loss
         loss_value = loss.item()
@@ -895,15 +921,14 @@ def train_one_epoch(model: torch.nn.Module, prompt_pool ,top_k,prompt_length ,
         depth_loss_value = depth_loss.item()
         total_loss_value = total_loss.item()
 
-        optimizer.zero_grad()
         # this attribute is added by timm on one optimizer (adahessian)
         is_second_order = hasattr(optimizer, 'is_second_order') and optimizer.is_second_order
 
-        trainable_params = [param for param in model.parameters() if param.requires_grad]
-
         grad_norm = loss_scaler(loss, optimizer, clip_grad=max_norm,
-                                parameters=trainable_params, create_graph=is_second_order)
-   
+                                parameters=model.parameters(), create_graph=is_second_order)
+        
+        optimizer.zero_grad()    
+        
         if fp16:
             loss_scale_value = loss_scaler.state_dict()["scale"]
 
@@ -959,6 +984,7 @@ def compute_loss_RWL(seg_loss, depth_loss ) :
 def compute_loss(seg_loss, depth_loss, weight_seg, weight_depth):
     # σ1과 σ2에 대한 역수를 계산합니다.
     eps = 1e-6
+    
     inv_var_depth = 1 / (weight_depth ** 2 +eps)
     inv_var_seg = 1 / (weight_seg ** 2 + eps)
 
@@ -972,7 +998,7 @@ def compute_loss(seg_loss, depth_loss, weight_seg, weight_depth):
     # 최종 손실을 계산합니다.
     total_loss = weighted_depth_loss + weighted_seg_loss + log_term
 
-    return total_loss
+    return total_loss 
 
 @torch.no_grad()
 def evaluate_seg(model, criterion, data_loader, device, epoch, in_domains, num_classes, dataset_name,

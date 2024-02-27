@@ -33,6 +33,7 @@ def nyu_transform(train, additional_targets, input_size=512, color_aug=False):
         augs = [
             A.SmallestMaxSize(max_size=input_size, p=1),
             A.HorizontalFlip(p=0.5),
+            A.ShiftScaleRotate(shift_limit=0.05, scale_limit=0.1, rotate_limit=15, p=0.5),  # 이동, 스케일링, 회전
         ]
         if color_aug: augs += [
                 # Color jittering from BYOL https://arxiv.org/pdf/2006.07733.pdf

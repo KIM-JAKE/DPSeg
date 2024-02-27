@@ -110,8 +110,8 @@ class MultiMAE(nn.Module):
         nn.init.uniform_(self.task_specific_prompts_2, a=-0.01, b=0.01)
         
         #learnable weight
-        self.raw_parameter_seg = torch.nn.Parameter(torch.tensor(-0.5))
-        self.raw_parameter_depth = torch.nn.Parameter(torch.tensor(-0.5))
+        self.raw_parameter_seg = torch.nn.Parameter(torch.tensor(0.6))
+        self.raw_parameter_depth = torch.nn.Parameter(torch.tensor(0.6))
 
         #prompts
         # self.prompt = Prompt(length=self.prompt_length, embed_dim=self.dim_tokens, prompt_pool=self.prompt_pool,
@@ -124,7 +124,7 @@ class MultiMAE(nn.Module):
                           pool_size=pool_size,
                           prompt_pool=True,
                           top_k=top_k)
-                    for _ in range(3)  # 각 레이어에 대응하는 프롬프트 풀 초기화
+                    for _ in range(2)  # 각 레이어에 대응하는 프롬프트 풀 초기화
                 ])
 
         # Initialize input and output adapters
@@ -148,9 +148,9 @@ class MultiMAE(nn.Module):
             Block(
                 dim=dim_tokens,
                 use_prompt_mask=
-                    (True if ( 0<= i < 3 )  or ( 6 <= i < 12 ) else False),
+                    (True if ( 0<= i < 2 )  or ( 8 <= i < 12 ) else False),
                 prompt_size=
-                    (self.top_k * self.prompt_length if 0 <= i < 3 else self.task_specific_prompt_length if 6 <= i < 12  else 0),
+                    (self.top_k * self.prompt_length if 0 <= i < 2 else self.task_specific_prompt_length if 8 <= i < 12  else 0),
                 num_heads=num_heads, 
                 mlp_ratio=mlp_ratio, 
                 qkv_bias=qkv_bias,
@@ -587,7 +587,7 @@ class MultiViT(MultiMAE):
                 
             for i, layer in enumerate(self.encoder):
                 
-                if  0 <= i < 3 :
+                if  0 <= i < 2 :
                     prompt_instance = self.layer_prompt_pools[i]
 
                     now_size = input_tokens.shape[1]
@@ -613,7 +613,7 @@ class MultiViT(MultiMAE):
                     input_tokens = self.prompt_dropout((input_tokens))
                     input_tokens = layer(input_tokens)  
             
-                elif 6 <= i < 12 :
+                elif 8 <= i < 12 :
                     
                     now_size = input_tokens.shape[1]
                     delete_size = now_size - want_size 

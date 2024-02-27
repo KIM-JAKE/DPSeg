@@ -33,10 +33,10 @@ import yaml
 
 import utils
 import utils.data_constants as data_constants
-from multimae import multimae
-from multimae.input_adapters import PatchedInputAdapter, SemSegInputAdapter
+from multimae import multimae_l2p
+from multimae.input_adapters import PatchedInputAdapter, SemSegInputAdapter, PromptPatchedInputAdapter
 from multimae.output_adapters import (ConvNeXtAdapter, DPTOutputAdapter,
-                                      SegmenterMaskTransformerAdapter,MultitaskDPTOutputAdapter)
+                                      SegmenterMaskTransformerAdapter)
 from utils import NativeScalerWithGradNormCount as NativeScaler
 from utils import create_model
 from utils.data_constants import COCO_SEMSEG_NUM_CLASSES
@@ -52,7 +52,7 @@ DOMAIN_CONF = {
         'channels': 3,
         'stride_level': 1,
         'aug_type': 'image',
-        'input_adapter': partial(PatchedInputAdapter, num_channels=3),
+        'input_adapter': partial(PromptPatchedInputAdapter, num_channels=3),
     },
     'depth': {
         'channels': 1,
@@ -249,6 +249,8 @@ def get_args():
     parser.add_argument('--local_rank', default=-1, type=int)
     parser.add_argument('--dist_on_itp', action='store_true')
     parser.add_argument('--dist_url', default='env://', help='url used to set up distributed training')
+    parser.add_argument('--freeze', default=['encoder'], nargs='*', type=list, help='freeze part in backbone model')
+    
 
     # Do we have a config file to parse?
     args_config, remaining = config_parser.parse_known_args()
@@ -350,15 +352,15 @@ def main(args):
         args.in_domains.remove('pseudo_semseg')
         args.in_domains.append('semseg')
 
-    input_adapters = {
-        domain: DOMAIN_CONF[domain]['input_adapter'](
-            stride_level=DOMAIN_CONF[domain]['stride_level'],
-            patch_size_full=args.patch_size,
-            image_size=args.input_size,
-            learnable_pos_emb=args.learnable_pos_emb,
-        )
-        for domain in args.in_domains
-    }
+    # input_adapters = {
+    #     domain: DOMAIN_CONF[domain]['input_adapter'](
+    #         stride_level=DOMAIN_CONF[domain]['stride_level'],
+    #         patch_size_full=args.patch_size,
+    #         image_size=args.input_size,
+    #         learnable_pos_emb=args.learnable_pos_emb,
+    #     )
+    #     for domain in args.in_domains
+    # }
 
     # DPT settings are fixed for ViT-B. Modify them if using a different backbone.
     if args.model != 'multivit_base' and args.output_adapter == 'dpt':
@@ -372,17 +374,33 @@ def main(args):
     }
 
     output_adapters = {
-        'semseg': adapters_dict[args.output_adapter](
-            num_classes=args.num_classes_with_void,
-            embed_dim=args.decoder_dim, patch_size=args.patch_size,
+        'depth' : adapters_dict['convnext'](num_classes=DOMAIN_CONF['depth']['channels'],
+            stride_level=DOMAIN_CONF['depth']['stride_level'],
+            patch_size=args.patch_size, 
+            prompt_deep = args.prompt_deep , prompt_shallow = args.prompt_shallow,
+            prompt_pool = args.prompt_pool,main_tasks=args.decoder_main_tasks.split('-'),
+            prompt_length = args.length , top_k = args.top_k , pool_size = args.size, task_specific_prompt_length = args.task_specific_prompt_length , not_self_attn = args.not_self_attn , 
         ),
     }
 
     model = create_model(
         args.model,
-        input_adapters=input_adapters,
+        input_adapters ={'rgb': PromptPatchedInputAdapter(num_channels=3,
+        stride_level=1,
+        patch_size_full=args.patch_size,
+        image_size=args.input_size,
+        learnable_pos_emb=args.learnable_pos_emb,
+        prompt_length=args.length,
+        top_k=args.top_k,
+        pool_size=args.size
+        )},
         output_adapters=output_adapters,
         drop_path_rate=args.drop_path_encoder,
+        use_prompt_mask=args.use_prompt_mask,
+        prompt_deep = args.prompt_deep , prompt_shallow = args.prompt_shallow,
+            prompt_pool = args.prompt_pool,
+            prompt_length = args.length , top_k = args.top_k , pool_size = args.size , not_self_attn = args.not_self_attn , 
+        task_specific_prompt_length = args.task_specific_prompt_length
     )
 
     if args.finetune:
@@ -409,6 +427,30 @@ def main(args):
         # Load pre-trained model
         msg = model.load_state_dict(checkpoint_model, strict=False)
         print(msg)
+        
+    if args.freeze:
+        # freeze args.freeze[encoder,blocks, patch_embed, cls_token] parameters
+        for n, p in model.named_parameters():
+            if n.startswith('encoder'):
+                p.requires_grad = False
+                
+        for name, param in model.named_parameters():
+            if any(substr in name for substr in ['input_adapters', 'output_adapters', 'bias']):
+                param.requires_grad = True
+
+    # check frozen well 
+    for n,p in model.named_parameters():
+        if p.requires_grad:
+          print('Unfrozen :' , n)
+          
+    model.to(device)
+
+    model_without_ddp = model
+
+    n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    
+    # print("Model = %s" % str(model_without_ddp))
+    print('number of l2p model params: {} M'.format(n_parameters / 1e6))
 
     model.to(device)
 
