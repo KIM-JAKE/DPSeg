@@ -508,7 +508,7 @@ class CrossMultiHeadAttention(nn.Module):
         scores = torch.matmul(query, key.transpose(-2, -1)) / (self.head_dim ** 0.5)
         
         mask = torch.zeros_like(scores)
-        mask[:, :, prompt_size:, :prompt_size] = float("-inf")
+        mask[:, :, prompt_size:, :prompt_size] = float("-1e4")
         
         scores = scores + mask
         attn = F.softmax(scores, dim=-1)
@@ -572,9 +572,9 @@ class ConvNeXtAdapter(nn.Module):
         self.not_self_attn = not_self_attn
         
         #For attention (prompt pool + task specific prompt)
-        self.self_attention1 = CrossMultiHeadAttention(embed_dim= self.dim_tokens_enc , num_heads= 8 )
+        # self.self_attention1 = CrossMultiHeadAttention(embed_dim= self.dim_tokens_enc , num_heads= 8 )
      
-        self.norm1 = nn.LayerNorm(self.dim_tokens_enc)
+        # self.norm1 = nn.LayerNorm(self.dim_tokens_enc)
         #blocks
         self.blocks = nn.Sequential(*[
             ConvNeXtBlock(dim=self.class_dim)
@@ -624,46 +624,45 @@ class ConvNeXtAdapter(nn.Module):
         N_H, N_W = H // self.patch_size, W // self.patch_size
         
         x = self.adapt_tokens(encoder_tokens, input_info)
-        
-        if self.not_self_attn :
+        total_prompt_length = self.prompt_length * self.top_k
+        # if self.not_self_attn :
             
-            if self.num_classes == 1: #depth
-                x =  x[:,2*self.task_specific_prompt_length:,:]
-                k_and_v= x[:,:self.task_specific_prompt_length,:]
+        #     if self.num_classes == 1: #depth
+        #         x =  x[:,2*self.task_specific_prompt_length:,:]
+        #         k_and_v= x[:,:self.task_specific_prompt_length,:]
         
-            elif self.num_classes == 40 :  #semseg
-                x = x[:,2*self.task_specific_prompt_length:,:]
-                k_and_v = x[:,self.task_specific_prompt_length : 2*self.task_specific_prompt_length,:]
+        #     elif self.num_classes == 40 :  #semseg
+        #         x = x[:,2*self.task_specific_prompt_length:,:]
+        #         k_and_v = x[:,self.task_specific_prompt_length : 2*self.task_specific_prompt_length,:]
             
-            query = self.query_projection(x)
-            key = self.key_projection(k_and_v)
-            value = self.value_projection(k_and_v)
+        #     query = self.query_projection(x)
+        #     key = self.key_projection(k_and_v)
+        #     value = self.value_projection(k_and_v)
 
-            scores = torch.matmul(query, key.transpose(-2, -1)) / (self.embed_dim ** 0.5)
-            attn = F.softmax(scores, dim=-1)
-            context = torch.matmul(attn, value)
+        #     scores = torch.matmul(query, key.transpose(-2, -1)) / (self.embed_dim ** 0.5)
+        #     attn = F.softmax(scores, dim=-1)
+        #     context = torch.matmul(attn, value)
             
-            final_prompts = self.out_projection(context) # B x promt_length(25) x 768
+        #     final_prompts = self.out_projection(context) # B x promt_length(25) x 768
                 
-        else : #self attention
+        # else : #self attention
             
-            if self.num_classes == 1: #depth
-                task_original_prompts = x[:,:self.task_specific_prompt_length,:]
-                x= x[:,2*self.task_specific_prompt_length:,:]
-                x = torch.cat([x[:,:self.task_specific_prompt_length,:] , x[:,2*self.task_specific_prompt_length:,:]], dim = 1) # B , task_prompt_not_origin + image ,768
-                x[:,:self.task_specific_prompt_length,:] +=  task_original_prompts
-                # B , task_prompt_residual + image ,768
-                x = self.norm1(x)
-            elif self.num_classes == 40 :  #semseg
-                task_original_prompts = x[:,self.task_specific_prompt_length : 2*self.task_specific_prompt_length,:]
-                x= x[:,2*self.task_specific_prompt_length:,:]
+        #     if self.num_classes == 1: #depth
+        #         task_original_prompts = x[:,:self.task_specific_prompt_length,:]
+        #         x= x[:,2*self.task_specific_prompt_length:,:]
+        #         x = torch.cat([x[:,:self.task_specific_prompt_length,:] , x[:,2*self.task_specific_prompt_length:,:]], dim = 1) # B , task_prompt_not_origin + image ,768
+        #         x[:,:self.task_specific_prompt_length,:] +=  task_original_prompts
+        #         # B , task_prompt_residual + image ,768
+        #         x = self.norm1(x)
+        #     elif self.num_classes == 40 :  #semseg
+        #         task_original_prompts = x[:,self.task_specific_prompt_length : 2*self.task_specific_prompt_length,:]
+        #         x= x[:,2*self.task_specific_prompt_length:,:]
 
-                x = torch.cat([x[:,self.task_specific_prompt_length : 2*self.task_specific_prompt_length,:] ,  x[:,2*self.task_specific_prompt_length:,:]], dim = 1)
-                x[:,:self.task_specific_prompt_length,:] +=  task_original_prompts
-                x = self.norm1(x)
+        #         x = torch.cat([x[:,self.task_specific_prompt_length : 2*self.task_specific_prompt_length,:] ,  x[:,2*self.task_specific_prompt_length:,:]], dim = 1)
+        #         x[:,:self.task_specific_prompt_length,:] +=  task_original_prompts
+        #         x = self.norm1(x)
        
-        x = self.self_attention1(x,x,self.task_specific_prompt_length)
-        x= x[:,self.task_specific_prompt_length:,:]
+        x= x[:,total_prompt_length:,:]
         x = self.proj_dec(x)
        
         x = rearrange(x, "b n (p c) -> b (n p) c", n=N_H * N_W, p=self.preds_per_patch, c=self.class_dim)

@@ -124,7 +124,7 @@ class MultiMAE(nn.Module):
                           pool_size=pool_size,
                           prompt_pool=True,
                           top_k=top_k)
-                    for _ in range(2)  # 각 레이어에 대응하는 프롬프트 풀 초기화
+                    for _ in range(12)  # 각 레이어에 대응하는 프롬프트 풀 초기화
                 ])
 
         # Initialize input and output adapters
@@ -148,9 +148,9 @@ class MultiMAE(nn.Module):
             Block(
                 dim=dim_tokens,
                 use_prompt_mask=
-                    (True if ( 0<= i < 2 )  or ( 8 <= i < 12 ) else False),
+                    (False if ( 0<= i < 2 )  or ( 8 <= i < 12 ) else False),
                 prompt_size=
-                    (self.top_k * self.prompt_length if 0 <= i < 2 else self.task_specific_prompt_length if 8 <= i < 12  else 0),
+                    (0),
                 num_heads=num_heads, 
                 mlp_ratio=mlp_ratio, 
                 qkv_bias=qkv_bias,
@@ -587,7 +587,7 @@ class MultiViT(MultiMAE):
                 
             for i, layer in enumerate(self.encoder):
                 
-                if  0 <= i < 2 :
+                if  0 <= i < 12 :
                     prompt_instance = self.layer_prompt_pools[i]
 
                     now_size = input_tokens.shape[1]
@@ -595,40 +595,26 @@ class MultiViT(MultiMAE):
                     input_tokens = input_tokens[:, delete_size:, :] 
                     
                     task1_tokens = torch.cat([expanded_prompts_1 , global_tokens ], dim = 1 )
-                    task2_tokens = torch.cat([expanded_prompts_2 ,  global_tokens], dim = 1 )
+                    # task2_tokens = torch.cat([expanded_prompts_2 ,  global_tokens], dim = 1 )
 
                     task1_prompt_pool = prompt_instance( task1_tokens)['prompted_embedding'][:,:prompt_input_size,:]
-                    task2_prompt_pool = prompt_instance( task2_tokens)['prompted_embedding'][:,:prompt_input_size,:]
+                    # task2_prompt_pool = prompt_instance( task2_tokens)['prompted_embedding'][:,:prompt_input_size,:]
                     
                     depth_idx_list = prompt_instance( task1_tokens)['prompt_idx']
-                    seg_idx_list  = prompt_instance( task2_tokens)['prompt_idx']
+                    # seg_idx_list  = prompt_instance( task2_tokens)['prompt_idx']
                     
                     #Plot which idx selected
                     
                     #self.plot_index_distribution(seg_idx_list[i], depth_idx_list[i], title=f'Layer {i} Prompt Index Distribution', filename=f'layer_{i}_distribution.png')
                     
-                    input_tokens = torch.cat([task1_prompt_pool ,task2_prompt_pool , input_tokens ] , dim = 1) #prompt pool *2 + input_tokens
+                    input_tokens = torch.cat([task1_prompt_pool , input_tokens ] , dim = 1) #prompt pool *2 + input_tokens
                                 
 
                     input_tokens = self.prompt_dropout((input_tokens))
                     input_tokens = layer(input_tokens)  
             
-                elif 8 <= i < 12 :
-                    
-                    now_size = input_tokens.shape[1]
-                    delete_size = now_size - want_size 
-                    input_tokens = input_tokens[:, delete_size:, :] 
-                    input_tokens = torch.cat([expanded_prompts_1 , expanded_prompts_2 ,  input_tokens ], dim = 1)
-                    input_tokens = self.prompt_dropout((input_tokens))
-                    input_tokens = layer(input_tokens)
-  
-                else:
-                    now_size = input_tokens.shape[1]
-                    delete_size = now_size - want_size 
-                    input_tokens = input_tokens[:, delete_size:, :] 
-                    input_tokens = layer(input_tokens)
             
-            encoder_tokens =  torch.cat([original_prompts ,  input_tokens] , dim = 1 ) 
+            encoder_tokens =  input_tokens 
             
         # Decode tokens for each task using task-specific output adapters
         preds = {

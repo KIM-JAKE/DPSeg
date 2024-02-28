@@ -374,12 +374,12 @@ def main(args):
     }
 
     output_adapters = {
-        'depth' : adapters_dict['convnext'](num_classes=DOMAIN_CONF['depth']['channels'],
-            stride_level=DOMAIN_CONF['depth']['stride_level'],
-            patch_size=args.patch_size, 
+        'semseg': adapters_dict['convnext'](
+            num_classes=args.num_classes_with_void,
+            embed_dim=args.decoder_dim, patch_size=args.patch_size, 
             prompt_deep = args.prompt_deep , prompt_shallow = args.prompt_shallow,
-            prompt_pool = args.prompt_pool,main_tasks=args.decoder_main_tasks.split('-'),
-            prompt_length = args.length , top_k = args.top_k , pool_size = args.size, task_specific_prompt_length = args.task_specific_prompt_length , not_self_attn = args.not_self_attn , 
+            prompt_pool = args.prompt_pool,
+            prompt_length = args.length , top_k = args.top_k , pool_size = args.size , task_specific_prompt_length = args.task_specific_prompt_length , not_self_attn = args.not_self_attn , 
         ),
     }
 
@@ -432,7 +432,7 @@ def main(args):
         # freeze args.freeze[encoder,blocks, patch_embed, cls_token] parameters
         for n, p in model.named_parameters():
             if n.startswith('encoder'):
-                p.requires_grad = False
+                p.requires_grad = True
                 
         for name, param in model.named_parameters():
             if any(substr in name for substr in ['input_adapters', 'output_adapters', 'bias']):

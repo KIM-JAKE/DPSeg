@@ -5,7 +5,7 @@ finetune:  "/root/datasets/multimae-b_98_rgb+-depth-semseg_1600e_multivit-afff3f
 
 # Input tasks
 in_domains: rgb
-seed : 420
+seed : 777
 
 # Architecture
 model: multivit_base
@@ -13,21 +13,21 @@ patch_size: 16
 num_global_tokens: 1
 drop_path_encoder: 0.1
 output_adapter: convnext
-decoder_dim: 7680
+decoder_dim: 6144
 decoder_preds_per_patch: 16
-decoder_depth: 1
+decoder_depth: 4
 
 # Train
 epochs: 300
 opt: adamw
-lr: 0.0004 # = 1e-4
-warmup_lr: 0.000004 # = 1e-6
-min_lr: 0.0
+lr: 0.0002 # = 1e-4
+warmup_lr: 0.000002 # = 1e-6
+min_lr: 0.0000001
 warmup_epochs: 1
-batch_size: 16
-input_size: 336
-layer_decay: 0.9
-weight_decay: 0.001
+batch_size: 4
+input_size: 640
+layer_decay: 0.75
+weight_decay: 0.05
 # Augmentation
 aug_name: simple
 
@@ -49,17 +49,17 @@ prompt_pool : True
 prompt_shallow : False
 prompt_deep : True
 top_k : 5
-size : 10
-length : 2 
-task_specific_prompt_length : 12
+size : 5
+length : 5 
+task_specific_prompt_length : 0
 not_self_attn : False
-use_prompt_mask : True
+use_prompt_mask : False
 
 # Wandb and l0ogging
 log_wandb: True # Set to True to log to Weights & Biases
 wandb_project:  'multimae-multi-l2p-deep-TTTT'
 wandb_entity: null # Change if needed
-wandb_run_name: 'pool_masking'
+wandb_run_name: 'VPT-SEgmentation-Taecho'
 log_images_wandb: False
 log_images_freq: 20
 output_dir: '/root/workspace/Results/pool_masking'

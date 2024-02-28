@@ -67,7 +67,7 @@ class DiceLoss(torch.nn.Module):
     def forward(self, pred, target):
         target = self.one_hot_encoding(target, 40)
         
-        smooth = 1.
+        smooth = 1e-5
         
         # pred와 target이 동일한 크기인지 확인
         if pred.size() != target.size():
@@ -230,7 +230,7 @@ def get_args():
                         help='Token dimension for the decoder layers, for convnext and segmenter adapters')
     parser.add_argument('--decoder_depth', default=4, type=int,
                         help='Depth of decoder (for convnext and segmenter adapters')
-    parser.add_argument('--drop_path_decoder', type=float, default=0.0, metavar='PCT',
+    parser.add_argument('--drop_path_decoder', type=float, default=0.05, metavar='PCT',
                         help='Drop path rate (default: 0.0)')
     parser.add_argument('--decoder_preds_per_patch', type=int, default=64,
                         help='Predictions per patch for convnext adapter')
@@ -245,7 +245,7 @@ def get_args():
                         help='Optimizer Epsilon (default: 1e-8)')
     parser.add_argument('--opt_betas', default=[0.9, 0.999], type=float, nargs='+', metavar='BETA',
                         help='Optimizer Betas (default: None, use opt default)')
-    parser.add_argument('--clip_grad', type=float, default=0.000001 , metavar='NORM',
+    parser.add_argument('--clip_grad', type=float, default=0.0001 , metavar='NORM',
                         help='Clip gradient norm (default: None, no clipping)')
     parser.add_argument('--momentum', type=float, default=0.9, metavar='M',
                         help='SGD momentum (default: 0.9)')
@@ -281,7 +281,7 @@ def get_args():
     parser.add_argument('--no_color_augs', dest='color_augs', default=False, action='store_false')
     # Finetuning parameters
     parser.add_argument('--finetune', default='', help='finetune from checkpoint')
-    parser.add_argument('--loss', default='l1',
+    parser.add_argument('--loss', default='berhu',
                         help='Loss to use. One of [l1, l2, berhu] (default: berhu)')
 
     # Dataset parameters
@@ -665,7 +665,7 @@ def main(args):
         args.weight_decay, args.weight_decay_end, args.epochs, num_training_steps_per_epoch)
     print("Max WD = %.7f, Min WD = %.7f" % (max(wd_schedule_values), min(wd_schedule_values)))
 
-    criterion = torch.nn.CrossEntropyLoss(ignore_index=utils.SEG_IGNORE_INDEX)
+    criterion = DiceLoss()
 
     print("semseg criterion = %s" % str(criterion))
     print("depth criterion = %s" % tasks_loss_fn)
@@ -897,7 +897,7 @@ def train_one_epoch(model: torch.nn.Module, prompt_pool ,top_k,prompt_length ,
             seg_loss = 0
             if 'semseg' in tasks_dict:
                 seg_pred, seg_gt = preds['semseg'], tasks_dict['semseg']
-                seg_loss = criterion(seg_pred, seg_gt) / 224
+                seg_loss = criterion(seg_pred, seg_gt) / 336
                 
             raw_parameter_seg = model.raw_parameter_seg
             raw_parameter_depth = model.raw_parameter_depth
