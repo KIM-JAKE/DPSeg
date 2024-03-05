@@ -123,7 +123,7 @@ def get_args():
                         help='Token dimension for the decoder layers, for convnext and segmenter adapters')
     parser.add_argument('--decoder_depth', default=4, type=int,
                         help='Depth of decoder (for convnext and segmenter adapters')
-    parser.add_argument('--drop_path_decoder', type=float, default=0.0, metavar='PCT',
+    parser.add_argument('--drop_path_decoder', type=float, default=0.25, metavar='PCT',
                         help='Drop path rate (default: 0.0)')
     parser.add_argument('--decoder_preds_per_patch', type=int, default=16,
                         help='Predictions per patch for convnext adapter')
@@ -174,6 +174,7 @@ def get_args():
 
     # Finetuning parameters
     parser.add_argument('--finetune', default='', help='finetune from checkpoint')
+    parser.add_argument('--open_layer', default=None, help='finetune opened layer')
 
     # Dataset parameters
     parser.add_argument('--num_classes', default=40, type=int, help='number of semantic classes')
@@ -432,12 +433,16 @@ def main(args):
         # freeze args.freeze[encoder,blocks, patch_embed, cls_token] parameters
         for n, p in model.named_parameters():
             if n.startswith('encoder'):
-                p.requires_grad = True
+                p.requires_grad = False
                 
         for name, param in model.named_parameters():
-            if any(substr in name for substr in ['input_adapters', 'output_adapters', 'bias']):
+            if any(substr in name for substr in [args.open_layer, 'input_adapters', 'output_adapters', 'bias']):
                 param.requires_grad = True
-
+                
+        for n, p in model.named_parameters():
+            if any(substr in name for substr in ['encoder.10','encoder.11']):
+                param.requires_grad = False
+                
     # check frozen well 
     for n,p in model.named_parameters():
         if p.requires_grad:

@@ -81,7 +81,7 @@ def simple_transform(train: bool,
             # A.Lambda(image=apply_random_scale_crop) ,
             A.HorizontalFlip(p=0.5),
             A.LongestMaxSize(max_size=input_size, p=1),
-            A.ColorJitter(brightness=0.1, contrast=0.05, saturation=0.02, hue=0.02, p=0.5),  # Color jittering from MoCo-v3 / DINO
+            A.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.2, hue=0.1, p=0.5),  # Color jittering from MoCo-v3 / DINO
             A.RandomScale(scale_limit=(0.1 - 1, 2.0 - 1), p=1),  # This is LSJ (0.1, 2.0)
             A.PadIfNeeded(min_height=input_size, min_width=input_size,
                           position=A.augmentations.PadIfNeeded.PositionType.TOP_LEFT,

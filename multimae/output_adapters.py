@@ -507,10 +507,10 @@ class CrossMultiHeadAttention(nn.Module):
         # 스케일드 닷 프로덕트 어텐션
         scores = torch.matmul(query, key.transpose(-2, -1)) / (self.head_dim ** 0.5)
         
-        mask = torch.zeros_like(scores)
-        mask[:, :, prompt_size:, :prompt_size] = float("-1e4")
+        #mask = torch.zeros_like(scores)
+        #mask[:, :, prompt_size:, :prompt_size] = float("-1e4")
         
-        scores = scores + mask
+        scores = scores #+ mask
         attn = F.softmax(scores, dim=-1)
 
         # 어텐션 적용
@@ -574,14 +574,14 @@ class ConvNeXtAdapter(nn.Module):
         #For attention (prompt pool + task specific prompt)
         # self.self_attention1 = CrossMultiHeadAttention(embed_dim= self.dim_tokens_enc , num_heads= 8 )
      
-        # self.norm1 = nn.LayerNorm(self.dim_tokens_enc)
+        self.norm1 = nn.LayerNorm(self.task_specific_prompt_length)
         #blocks
         self.blocks = nn.Sequential(*[
-            ConvNeXtBlock(dim=self.class_dim)
+            ConvNeXtBlock(dim=self.task_specific_prompt_length)
             for _ in range(depth)
         ])
 
-        self.final_layer = nn.Conv2d(self.class_dim, self.num_classes, 1)
+        self.final_layer = nn.Conv2d(self.task_specific_prompt_length, self.num_classes, 1)
         self.apply(self._init_weights)
 
     def init(self, dim_tokens_enc: int = 768 
@@ -595,7 +595,7 @@ class ConvNeXtAdapter(nn.Module):
         self.in_channels = dim_tokens_enc * len(self.main_tasks)
 
         # Projection of encoder tokens to the patch dimension
-        self.proj_dec = nn.Linear(self.in_channels, self.embed_dim)
+        self.proj_dec = nn.Linear(self.in_channels, self.embed_dim,bias = False)
         self._init_weights(self.proj_dec)
         
         # # Task specific prompts
@@ -625,52 +625,60 @@ class ConvNeXtAdapter(nn.Module):
         
         x = self.adapt_tokens(encoder_tokens, input_info)
         total_prompt_length = self.prompt_length * self.top_k
-        # if self.not_self_attn :
+        if self.not_self_attn :
             
-        #     if self.num_classes == 1: #depth
-        #         x =  x[:,2*self.task_specific_prompt_length:,:]
-        #         k_and_v= x[:,:self.task_specific_prompt_length,:]
+            if self.num_classes == 1: #depth
+                x =  x[:,2*self.task_specific_prompt_length:,:]
+                k_and_v= x[:,:self.task_specific_prompt_length,:]
         
-        #     elif self.num_classes == 40 :  #semseg
-        #         x = x[:,2*self.task_specific_prompt_length:,:]
-        #         k_and_v = x[:,self.task_specific_prompt_length : 2*self.task_specific_prompt_length,:]
+            elif self.num_classes == 40 :  #semseg
+                x = x[:,2*self.task_specific_prompt_length:,:]
+                k_and_v = x[:,self.task_specific_prompt_length : 2*self.task_specific_prompt_length,:]
             
-        #     query = self.query_projection(x)
-        #     key = self.key_projection(k_and_v)
-        #     value = self.value_projection(k_and_v)
+            query = self.query_projection(x)
+            key = self.key_projection(k_and_v)
+            value = self.value_projection(k_and_v)
 
-        #     scores = torch.matmul(query, key.transpose(-2, -1)) / (self.embed_dim ** 0.5)
-        #     attn = F.softmax(scores, dim=-1)
-        #     context = torch.matmul(attn, value)
+            scores = torch.matmul(query, key.transpose(-2, -1)) / (self.embed_dim ** 0.5)
+            attn = F.softmax(scores, dim=-1)
+            context = torch.matmul(attn, value)
             
-        #     final_prompts = self.out_projection(context) # B x promt_length(25) x 768
+            final_prompts = self.out_projection(context) # B x promt_length(25) x 768
                 
-        # else : #self attention
+        else : #self attention
             
-        #     if self.num_classes == 1: #depth
-        #         task_original_prompts = x[:,:self.task_specific_prompt_length,:]
-        #         x= x[:,2*self.task_specific_prompt_length:,:]
-        #         x = torch.cat([x[:,:self.task_specific_prompt_length,:] , x[:,2*self.task_specific_prompt_length:,:]], dim = 1) # B , task_prompt_not_origin + image ,768
-        #         x[:,:self.task_specific_prompt_length,:] +=  task_original_prompts
-        #         # B , task_prompt_residual + image ,768
-        #         x = self.norm1(x)
-        #     elif self.num_classes == 40 :  #semseg
-        #         task_original_prompts = x[:,self.task_specific_prompt_length : 2*self.task_specific_prompt_length,:]
-        #         x= x[:,2*self.task_specific_prompt_length:,:]
-
-        #         x = torch.cat([x[:,self.task_specific_prompt_length : 2*self.task_specific_prompt_length,:] ,  x[:,2*self.task_specific_prompt_length:,:]], dim = 1)
-        #         x[:,:self.task_specific_prompt_length,:] +=  task_original_prompts
-        #         x = self.norm1(x)
-       
-        x= x[:,total_prompt_length:,:]
+            # if self.num_classes == 1: #depth
+            #     task_original_prompts = x[:,:self.task_specific_prompt_length,:]
+            #     x= x[:,2*self.task_specific_prompt_length:,:]
+            #     x = torch.cat([x[:,:self.task_specific_prompt_length,:] , x[:,2*self.task_specific_prompt_length:,:]], dim = 1) # B , task_prompt_not_origin + image ,768
+            #     x[:,:self.task_specific_prompt_length,:] +=  task_original_prompts
+            #     # B , task_prompt_residual + image ,768
+            #     x = self.norm1(x)
+            
+            if self.num_classes == 40 :  #semseg
+                # task_original_prompts = x[:,: self.task_specific_prompt_length,:]
+                # x= x[:, 1 + total_prompt_length + self.task_specific_prompt_length:,:]
+                x = torch.cat([x[:, : self.task_specific_prompt_length,:] ,  x[:,total_prompt_length + self.task_specific_prompt_length:,:]], dim = 1)
+                # x[:,:self.task_specific_prompt_length,:] +=  task_original_prompts
+                x = F.normalize(x, dim=2, p=2)
+              
         x = self.proj_dec(x)
-       
-        x = rearrange(x, "b n (p c) -> b (n p) c", n=N_H * N_W, p=self.preds_per_patch, c=self.class_dim)
-        x = rearrange(x, "b (nh nw ph pw) c -> b c (nh ph) (nw pw)",
-                        nh=N_H, nw=N_W,
-                        ph=int(self.preds_per_patch ** 0.5),
-                        pw=int(self.preds_per_patch ** 0.5))
-        x = self.blocks(x)
+        x = F.normalize(x, dim=2, p=2)
+        
+        patch = x[:,1 + self.task_specific_prompt_length:,:]
+        prompt =x[:,:self.task_specific_prompt_length,:] 
+        
+        x = patch @ prompt.transpose(1,2)
+        masks = self.norm1(x)
+        masks = rearrange(masks, "b (nh nw) c -> b c nh nw", nh=N_H, nw=N_W)
+        
+        # x = rearrange(x, "b n (p c) -> b (n p) c", n=N_H * N_W, p=self.preds_per_patch, c=self.class_dim)
+        # x = rearrange(x, "b (nh nw ph pw) c -> b c (nh ph) (nw pw)",
+        #                 nh=N_H, nw=N_W,
+        #                 ph=int(self.preds_per_patch ** 0.5),
+        #                 pw=int(self.preds_per_patch ** 0.5))
+        
+        x = self.blocks(masks)
             
         x = self.final_layer(x)
             

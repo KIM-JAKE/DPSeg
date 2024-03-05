@@ -210,13 +210,13 @@ def get_args():
     # Model parameters
     parser.add_argument('--model', default='multivit_base', type=str, metavar='MODEL',
                         help='Name of model to train')
-    parser.add_argument('--num_global_tokens', default=0, type=int,
+    parser.add_argument('--num_global_tokens', default=1, type=int,
                         help='number of global tokens to add to encoder')
     parser.add_argument('--patch_size', default=16, type=int,
                         help='base patch size for image-like modalities')
     parser.add_argument('--input_size', default=512, type=int,
                         help='images input size for backbone')
-    parser.add_argument('--drop_path_encoder', type=float, default=0.0, metavar='PCT',
+    parser.add_argument('--drop_path_encoder', type=float, default=0.1, metavar='PCT',
                         help='Drop path rate (default: 0.1)')
     parser.add_argument('--learnable_pos_emb', action='store_true',
                         help='Makes the positional embedding learnable')
@@ -230,7 +230,7 @@ def get_args():
                         help='Token dimension for the decoder layers, for convnext and segmenter adapters')
     parser.add_argument('--decoder_depth', default=4, type=int,
                         help='Depth of decoder (for convnext and segmenter adapters')
-    parser.add_argument('--drop_path_decoder', type=float, default=0.05, metavar='PCT',
+    parser.add_argument('--drop_path_decoder', type=float, default=0.0, metavar='PCT',
                         help='Drop path rate (default: 0.0)')
     parser.add_argument('--decoder_preds_per_patch', type=int, default=64,
                         help='Predictions per patch for convnext adapter')
@@ -245,11 +245,11 @@ def get_args():
                         help='Optimizer Epsilon (default: 1e-8)')
     parser.add_argument('--opt_betas', default=[0.9, 0.999], type=float, nargs='+', metavar='BETA',
                         help='Optimizer Betas (default: None, use opt default)')
-    parser.add_argument('--clip_grad', type=float, default=0.0001 , metavar='NORM',
+    parser.add_argument('--clip_grad', type=float, default=None , metavar='NORM',
                         help='Clip gradient norm (default: None, no clipping)')
     parser.add_argument('--momentum', type=float, default=0.9, metavar='M',
                         help='SGD momentum (default: 0.9)')
-    parser.add_argument('--weight_decay', type=float, default=0.5, #testing
+    parser.add_argument('--weight_decay', type=float, default=0.05, #testing
                         help='weight decay (default: 0.05)')
     parser.add_argument('--weight_decay_end', type=float, default=None, help="""Final value of the
         weight decay. We use a cosine schedule for WD. 
@@ -303,7 +303,7 @@ def get_args():
                         help='path where to save, empty for no saving')
     parser.add_argument('--device', default='cuda',
                         help='device to use for training / testing')
-    parser.add_argument('--seed', default= 777 , type=int)
+    parser.add_argument('--seed', default= 0, type=int)
     parser.add_argument('--resume', default='', help='resume from checkpoint')
     parser.add_argument('--auto_resume', action='store_true')
     parser.add_argument('--no_auto_resume', action='store_false', dest='auto_resume')
@@ -665,7 +665,7 @@ def main(args):
         args.weight_decay, args.weight_decay_end, args.epochs, num_training_steps_per_epoch)
     print("Max WD = %.7f, Min WD = %.7f" % (max(wd_schedule_values), min(wd_schedule_values)))
 
-    criterion = DiceLoss()
+    criterion = torch.nn.CrossEntropyLoss(ignore_index=utils.SEG_IGNORE_INDEX)
 
     print("semseg criterion = %s" % str(criterion))
     print("depth criterion = %s" % tasks_loss_fn)
