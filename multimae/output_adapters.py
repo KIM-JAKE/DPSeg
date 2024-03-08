@@ -570,11 +570,13 @@ class ConvNeXtAdapter(nn.Module):
         self.num_classes = int(num_classes)
         self.interpolate_mode = interpolate_mode
         self.not_self_attn = not_self_attn
+        self.scale = self.dim_tokens_enc ** -0.5
         
         #For attention (prompt pool + task specific prompt)
         # self.self_attention1 = CrossMultiHeadAttention(embed_dim= self.dim_tokens_enc , num_heads= 8 )
      
         self.norm1 = nn.LayerNorm(self.task_specific_prompt_length)
+        
         #blocks
         self.blocks = nn.Sequential(*[
             ConvNeXtBlock(dim=self.task_specific_prompt_length)
@@ -583,7 +585,7 @@ class ConvNeXtAdapter(nn.Module):
 
         self.final_layer = nn.Conv2d(self.task_specific_prompt_length, self.num_classes, 1)
         self.apply(self._init_weights)
-
+        
     def init(self, dim_tokens_enc: int = 768 
          ):
         """
@@ -598,6 +600,9 @@ class ConvNeXtAdapter(nn.Module):
         self.proj_dec = nn.Linear(self.in_channels, self.embed_dim,bias = False)
         self._init_weights(self.proj_dec)
         
+
+        self.proj_patch = nn.Linear(self.embed_dim, self.embed_dim, bias=False)
+        self.proj_classes = nn.Linear(self.embed_dim, self.embed_dim, bias=False)
         # # Task specific prompts
         # self.task_specific_prompts = nn.Parameter(torch.rand(1,self.task_specific_prompt_length
         # ,dim_tokens_enc))
@@ -660,28 +665,27 @@ class ConvNeXtAdapter(nn.Module):
                 # x= x[:, 1 + total_prompt_length + self.task_specific_prompt_length:,:]
                 x = torch.cat([x[:, : self.task_specific_prompt_length,:] ,  x[:,total_prompt_length + self.task_specific_prompt_length:,:]], dim = 1)
                 # x[:,:self.task_specific_prompt_length,:] +=  task_original_prompts
-                x = F.normalize(x, dim=2, p=2)
               
         x = self.proj_dec(x)
-        x = F.normalize(x, dim=2, p=2)
         
         patch = x[:,1 + self.task_specific_prompt_length:,:]
         prompt =x[:,:self.task_specific_prompt_length,:] 
+
+        patch = self.proj_patch(patch)
+        prompt = self.proj_classes(prompt)
         
         x = patch @ prompt.transpose(1,2)
-        masks = self.norm1(x)
-        masks = rearrange(masks, "b (nh nw) c -> b c nh nw", nh=N_H, nw=N_W)
-        
+        x = self.norm1(x)
+        x = rearrange(x, "b (nh nw) c -> b c nh nw", nh=N_H, nw=N_W)
         # x = rearrange(x, "b n (p c) -> b (n p) c", n=N_H * N_W, p=self.preds_per_patch, c=self.class_dim)
         # x = rearrange(x, "b (nh nw ph pw) c -> b c (nh ph) (nw pw)",
         #                 nh=N_H, nw=N_W,
         #                 ph=int(self.preds_per_patch ** 0.5),
         #                 pw=int(self.preds_per_patch ** 0.5))
         
-        x = self.blocks(masks)
-            
+        x = self.blocks(x)
         x = self.final_layer(x)
-            
+        
         # Interpolate to semseg res
         x = F.interpolate(x, size=(H, W), mode=self.interpolate_mode )
 

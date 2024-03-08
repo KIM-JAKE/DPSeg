@@ -208,7 +208,6 @@ class PromptPatchedInputAdapter(nn.Module):
             in_channels=self.num_channels, out_channels=self.dim_tokens,
             kernel_size=(self.P_H, self.P_W), stride=(self.P_H, self.P_W)
         )
-
     @torch.jit.ignore
     def no_weight_decay(self):
         return {'pos_emb'}

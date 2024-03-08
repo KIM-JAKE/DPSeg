@@ -13,17 +13,17 @@ patch_size: 16
 num_global_tokens: 1
 drop_path_encoder: 0.1
 output_adapter: convnext
-decoder_dim: 6144
+decoder_dim: 2048
 decoder_preds_per_patch: 16
 decoder_depth: 4
 
 # Train
-epochs: 200
+epochs: 400
 opt: adamw
 lr: 0.0001 # = 1e-4
 warmup_lr: 0.000001 # = 1e-6
 min_lr: 0.
-warmup_epochs: 1
+warmup_epochs: 40
 batch_size: 2
 input_size: 640
 layer_decay: 0.75
@@ -52,8 +52,8 @@ prompt_shallow : False
 prompt_deep : True
 top_k : 5
 size : 5
-length : 5  
-task_specific_prompt_length : 200
+length : 5 
+task_specific_prompt_length : 160
 not_self_attn : False
 use_prompt_mask : True
 
@@ -61,7 +61,7 @@ use_prompt_mask : True
 log_wandb: True # Set to True to log to Weights & Biases
 wandb_project: 'promptmae-test'
 wandb_entity: null # Change if needed
-wandb_run_name: 'vpt-semseg-original-code-lr=0.0001-enc=5-test_for_segmenter=200'
+wandb_run_name: 'vpt-semseg-lr=0.0001-enc=5-segmenter=160-dd=2048'
 log_images_wandb: False
 log_images_freq: 20
-output_dir: '/root/workspace/Results/vpt-semseg-original-lr=0.0001-enc=5-test_for_segmenter=200'
+output_dir: '/root/workspace/Results/vpt-semseg-lr=0.0001-enc=5-segmenter=160-dd=2048'

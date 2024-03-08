@@ -377,6 +377,7 @@ def get_args():
     parser.add_argument('--pull_constraint', default=True)
     parser.add_argument('--pull_constraint_coeff', default=0.1, type=float)
     parser.add_argument('--task_specific_prompt_length', default= 100, type=int)
+    parser.add_argument('--open_layer', default=None, help='finetune opened layer')
     
     # when using prompt you should activate shallow or deep
     parser.add_argument('--prompt_mode' , default = None )
@@ -523,7 +524,7 @@ def main(args):
             prompt_length = args.length , top_k = args.top_k , pool_size = args.size , task_specific_prompt_length = args.task_specific_prompt_length , not_self_attn = args.not_self_attn , 
         ),
         'depth' : adapters_dict['convnext'](num_classes=DOMAIN_CONF['depth']['channels'],
-            stride_level=DOMAIN_CONF['depth']['stride_level'],
+            stride_level=DOMAIN_CONF['depth']['stride_level'],embed_dim=args.decoder_dim,
             patch_size=args.patch_size, 
             prompt_deep = args.prompt_deep , prompt_shallow = args.prompt_shallow,
             prompt_pool = args.prompt_pool,main_tasks=args.decoder_main_tasks.split('-'),
@@ -599,7 +600,7 @@ def main(args):
                 p.requires_grad = False
                 
         for name, param in model.named_parameters():
-            if any(substr in name for substr in ['input_adapters', 'output_adapters', 'bias']):
+            if any(substr in name for substr in [args.open_layer, 'input_adapters', 'output_adapters', 'bias']):
                 param.requires_grad = True
 
     # check frozen well 
@@ -890,13 +891,20 @@ def train_one_epoch(model: torch.nn.Module, prompt_pool ,top_k,prompt_length ,
         
         # Forward + backward
         with torch.cuda.amp.autocast(enabled=fp16):
-            preds = model(input_dict, prompt_pool = prompt_pool , top_k = top_k, prompt_length = prompt_length ,
+            preds_depth = model(input_dict, prompt_pool = prompt_pool , top_k = top_k, prompt_length = prompt_length ,
+                          pool_size = pool_size , prompt_deep = prompt_deep ,
+            prompt_shallow = prompt_shallow ,return_all_layers=return_all_layers)
+
+            combined_input = torch.cat((input_dict['rgb'],preds_depth['depth']), dim=1)
+            
+            preds_semseg = model(combined_input, prompt_pool = prompt_pool , top_k = top_k, prompt_length = prompt_length ,
                           pool_size = pool_size , prompt_deep = prompt_deep ,
             prompt_shallow = prompt_shallow ,return_all_layers=return_all_layers)
             # 세그멘테이션 손실 계산
+            
             seg_loss = 0
             if 'semseg' in tasks_dict:
-                seg_pred, seg_gt = preds['semseg'], tasks_dict['semseg']
+                seg_pred, seg_gt = preds_semseg['semseg'], tasks_dict['semseg']
                 seg_loss = criterion(seg_pred, seg_gt) / 336
                 
             raw_parameter_seg = model.raw_parameter_seg
@@ -905,15 +913,15 @@ def train_one_epoch(model: torch.nn.Module, prompt_pool ,top_k,prompt_length ,
             # 뎁스 손실 계산
             depth_loss = 0
             if 'depth' in tasks_dict:
-                depth_loss = tasks_loss_fn['depth'](preds['depth' ].float(), tasks_dict['depth' ], mask_valid=None) / 336
+                depth_loss = tasks_loss_fn['depth'](preds_depth['depth' ].float(), tasks_dict['depth' ], mask_valid=None) / 336
            
             #for weight 0~1!
             weight_seg = raw_parameter_seg
             weight_depth = raw_parameter_depth
             
             # 총 손실 계산 및 역전파
-            loss = compute_loss_RWL(seg_loss, depth_loss )
-            # loss = compute_loss(seg_loss, depth_loss , weight_seg , weight_depth)
+            # loss = compute_loss_RWL(seg_loss, depth_loss )
+            loss = compute_loss(seg_loss, depth_loss , weight_seg , weight_depth)
         
         total_loss = seg_loss + depth_loss
         loss_value = loss.item()

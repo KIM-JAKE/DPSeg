@@ -76,6 +76,38 @@ DOMAIN_CONF = {
     },
 }
 
+class DiceLoss(torch.nn.Module):
+    def __init__(self):
+        super(DiceLoss, self).__init__()
+        
+    def one_hot_encoding(self, target, num_classes):
+        # target: [batch_size, height, width], 예상되는 값은 0부터 num_classes-1까지의 정수
+        # num_classes: 클래스의 총 개수
+        target = torch.where(target == 255, torch.zeros_like(target), target)
+        batch_size, height, width = target.size()
+        one_hot = torch.zeros(batch_size, num_classes, height, width, device=target.device)
+        one_hot = one_hot.scatter_(1, target.unsqueeze(1), 1)
+        return one_hot
+    
+    def forward(self, pred, target):
+        target = self.one_hot_encoding(target, 40)
+        
+        smooth = 1e-5
+        
+        # pred와 target이 동일한 크기인지 확인
+        if pred.size() != target.size():
+            raise ValueError("pred와 target의 크기가 일치하지 않습니다. pred의 크기: {}, target의 크기: {}".format(pred.size(), target.size()))
+        
+        iflat = pred.contiguous().view(-1)
+        tflat = target.contiguous().view(-1)
+        
+        intersection = (iflat * tflat).sum()
+        
+        A_sum = torch.sum(iflat * iflat)
+        B_sum = torch.sum(tflat * tflat)
+        
+        return 1 - ((2. * intersection + smooth) / (A_sum + B_sum + smooth))
+    
 
 def get_args():
     config_parser = parser = argparse.ArgumentParser(description='Training Config', add_help=False)
@@ -439,10 +471,6 @@ def main(args):
             if any(substr in name for substr in [args.open_layer, 'input_adapters', 'output_adapters', 'bias']):
                 param.requires_grad = True
                 
-        for n, p in model.named_parameters():
-            if any(substr in name for substr in ['encoder.10','encoder.11']):
-                param.requires_grad = False
-                
     # check frozen well 
     for n,p in model.named_parameters():
         if p.requires_grad:
@@ -452,10 +480,10 @@ def main(args):
 
     model_without_ddp = model
 
-    n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    n_parameters = sum(p.numel() for p in model.output_adapters.parameters() if p.requires_grad)
     
     # print("Model = %s" % str(model_without_ddp))
-    print('number of l2p model params: {} M'.format(n_parameters / 1e6))
+    print('number of output_adapters params: {} M'.format(n_parameters / 1e6))
 
     model.to(device)
 
@@ -463,7 +491,7 @@ def main(args):
     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
 
     print("Model = %s" % str(model_without_ddp))
-    print('number of params: {} M'.format(n_parameters / 1e6))
+    print('number of total params: {} M'.format(n_parameters / 1e6))
 
     total_batch_size = args.batch_size * utils.get_world_size()
     num_training_steps_per_epoch = len(dataset_train) // total_batch_size
