@@ -32,6 +32,7 @@ import torch.nn.functional as F
 import yaml
 
 import utils
+from utils.focal_loss import FocalLoss
 import utils.data_constants as data_constants
 from multimae import multimae_l2p
 from multimae.input_adapters import PatchedInputAdapter, SemSegInputAdapter, PromptPatchedInputAdapter
@@ -531,7 +532,7 @@ def main(args):
         args.weight_decay, args.weight_decay_end, args.epochs, num_training_steps_per_epoch)
     print("Max WD = %.7f, Min WD = %.7f" % (max(wd_schedule_values), min(wd_schedule_values)))
 
-    criterion = torch.nn.CrossEntropyLoss(ignore_index=utils.SEG_IGNORE_INDEX)
+    criterion = FocalLoss()
 
     print("criterion = %s" % str(criterion))
 

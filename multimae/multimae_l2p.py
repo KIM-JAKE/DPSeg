@@ -628,7 +628,7 @@ class MultiViT(MultiMAE):
                     task1_prompt_pool = self.prompt_dropout(task1_prompt_pool)
                     
                     if i == 5 : 
-                        input_tokens = torch.cat([ expanded_prompts_1, task1_prompt_pool , input_tokens ] , dim = 1)
+                        input_tokens = torch.cat([ task1_prompt_pool , input_tokens ] , dim = 1)
                         
                         input_tokens = layer(input_tokens)     
                     else: 
@@ -636,7 +636,7 @@ class MultiViT(MultiMAE):
                         
                         input_tokens = layer(input_tokens) 
                             
-            encoder_tokens =  torch.cat([expanded_prompts_1 , input_tokens] , dim = 1 )
+            encoder_tokens =  torch.cat([expanded_prompts_1 ,task1_prompt_pool , input_tokens] , dim = 1 )
             
         # Decode tokens for each task using task-specific output adapters
         preds = {
