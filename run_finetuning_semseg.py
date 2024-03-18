@@ -31,6 +31,7 @@ import torch.distributed as dist
 import torch.nn.functional as F
 import yaml
 
+from utils.focal_loss import FocalLoss
 import utils
 import utils.data_constants as data_constants
 from multimae import multimae_l2p
@@ -46,6 +47,8 @@ from utils.log_images import log_semseg_wandb
 from utils.optim_factory import LayerDecayValueAssigner, create_optimizer
 from utils.pos_embed import interpolate_pos_embed_multimae
 from utils.semseg_metrics import mean_iou
+from utils.copy_paste import CopyPaste
+from utils.lovasz_loss import lovasz_softmax
 
 DOMAIN_CONF = {
     'rgb': {
@@ -75,6 +78,8 @@ DOMAIN_CONF = {
         'aug_type': 'mask',
     },
 }
+
+from torch.utils.data import default_collate
 
 class DiceLoss(torch.nn.Module):
     def __init__(self):
@@ -155,7 +160,7 @@ def get_args():
                         help='Token dimension for the decoder layers, for convnext and segmenter adapters')
     parser.add_argument('--decoder_depth', default=4, type=int,
                         help='Depth of decoder (for convnext and segmenter adapters')
-    parser.add_argument('--drop_path_decoder', type=float, default=0.25, metavar='PCT',
+    parser.add_argument('--drop_path_decoder', type=float, default=0.0, metavar='PCT',
                         help='Drop path rate (default: 0.0)')
     parser.add_argument('--decoder_preds_per_patch', type=int, default=16,
                         help='Predictions per patch for convnext adapter')
@@ -348,7 +353,7 @@ def main(args):
     if args.log_wandb:
         log_writer = utils.WandbLogger(args)
     else:
-        log_writer = None
+        log_writer = None       
 
     data_loader_train = torch.utils.data.DataLoader(
         dataset_train, sampler=sampler_train,
@@ -357,7 +362,7 @@ def main(args):
         pin_memory=args.pin_mem,
         drop_last=True,
     )
-
+    
     if dataset_val is not None:
         data_loader_val = torch.utils.data.DataLoader(
             dataset_val, sampler=sampler_val,
@@ -461,15 +466,15 @@ def main(args):
         msg = model.load_state_dict(checkpoint_model, strict=False)
         print(msg)
         
-    if args.freeze:
-        # freeze args.freeze[encoder,blocks, patch_embed, cls_token] parameters
-        for n, p in model.named_parameters():
-            if n.startswith('encoder'):
-                p.requires_grad = False
+    # if args.freeze:
+    #     # freeze args.freeze[encoder,blocks, patch_embed, cls_token] parameters
+    #     for n, p in model.named_parameters():
+    #         if n.startswith('encoder'):
+    #             p.requires_grad = False
                 
-        for name, param in model.named_parameters():
-            if any(substr in name for substr in [args.open_layer, 'input_adapters', 'output_adapters', 'bias']):
-                param.requires_grad = True
+    #     # for name, param in model.named_parameters():
+    #     #     if any(substr in name for substr in [args.open_layer, 'input_adapters', 'output_adapters', 'bias']):
+    #     #         param.requires_grad = True
                 
     # check frozen well 
     for n,p in model.named_parameters():
@@ -531,8 +536,18 @@ def main(args):
         args.weight_decay, args.weight_decay_end, args.epochs, num_training_steps_per_epoch)
     print("Max WD = %.7f, Min WD = %.7f" % (max(wd_schedule_values), min(wd_schedule_values)))
 
-    criterion = torch.nn.CrossEntropyLoss(ignore_index=utils.SEG_IGNORE_INDEX)
-
+    alpha = torch.tensor([0.0018, 0.0023, 0.0040, 0.0041, 0.0067, 0.0064, 0.0085, 0.0079, 0.0079,
+         0.0093, 0.0130, 0.0100, 0.0147, 0.0127, 0.0162, 0.0199, 0.0165, 0.0163,
+         0.0280, 0.0184, 0.0128, 0.0262, 0.0295, 0.0256, 0.0401, 0.0512, 0.0483,
+         0.0431, 0.0472, 0.0477, 0.0608, 0.0437, 0.0677, 0.0621, 0.0780, 0.0726,
+         0.0073, 0.0076, 0.0033, 0.0008])
+    for k in range(len(alpha)) :
+        if alpha[k] < 0.01 :
+            alpha[k] = 0.01
+    
+    # criterion = FocalLoss(alpha = alpha.to('cuda:0'))
+    criterion = torch.nn.CrossEntropyLoss(ignore_index=255 ,weight= alpha.to('cuda:0'))
+    # criterion = torch.nn.CrossEntropyLoss(ignore_index=255)
     print("criterion = %s" % str(criterion))
 
     # Specifies if transformer encoder should only return last layer or all layers for DPT

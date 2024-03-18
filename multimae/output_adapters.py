@@ -378,11 +378,12 @@ class SegmenterMaskTransformerAdapter(nn.Module):
     def __init__(
             self,
             num_classes,
+            task_specific_prompt_length :int,
             depth: int = 2,
             num_heads: int = 12,
             embed_dim: int = 768,
             mlp_ratio=4,
-            drop_path_rate=0.1,
+            drop_path_rate=0.00,
             drop_rate=0.0,
             attn_drop_rate=0.0,
             qkv_bias=True,
@@ -392,13 +393,11 @@ class SegmenterMaskTransformerAdapter(nn.Module):
             **kwargs,
     ):
         super().__init__()
+        self.task_specific_prompt_length = task_specific_prompt_length
         self.main_tasks = main_tasks
         self.patch_size = patch_size
         self.embed_dim = embed_dim
         self.num_classes = num_classes
-
-        self.cls_emb = nn.Parameter(torch.zeros(1, num_classes, embed_dim))
-        trunc_normal_(self.cls_emb, std=0.02)
 
         self.patch_proj = nn.Linear(embed_dim, embed_dim, bias=False)
         self.classes_proj = nn.Linear(embed_dim, embed_dim, bias=False)
@@ -406,12 +405,12 @@ class SegmenterMaskTransformerAdapter(nn.Module):
         dpr = [x.item() for x in torch.linspace(0, drop_path_rate, depth)]
         self.blocks = nn.ModuleList([
             Block(dim=embed_dim, num_heads=num_heads, mlp_ratio=mlp_ratio, qkv_bias=qkv_bias, drop=drop_rate,
-                  attn_drop=attn_drop_rate, drop_path=dpr[i], norm_layer=norm_layer)
+                  attn_drop=attn_drop_rate, drop_path=dpr[i], norm_layer=norm_layer,use_prompt_mask=False,prompt_size= 0 )
             for i in range(depth)
         ])
 
         self.decoder_norm = norm_layer(embed_dim)
-        self.mask_norm = norm_layer(num_classes)
+        self.mask_norm = norm_layer(self.task_specific_prompt_length)
         self.apply(self._init_weights)
 
     def init(self, dim_tokens_enc: int = 768):
@@ -436,16 +435,13 @@ class SegmenterMaskTransformerAdapter(nn.Module):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
 
+
     def adapt_tokens(self, encoder_tokens, input_info):
         # Adapt tokens
-        x = []
-        for task in self.main_tasks:
-            start_idx = input_info['tasks'][task]['start_idx']
-            end_idx = input_info['tasks'][task]['end_idx']
-            x.append(encoder_tokens[:, start_idx:end_idx])
-
-        x = torch.cat(x, dim=-1)
-        return x
+        
+        x = encoder_tokens
+        
+        return x 
 
     def forward(self, encoder_tokens: torch.Tensor, input_info: Dict):
         H, W = input_info['image_size']
@@ -454,16 +450,14 @@ class SegmenterMaskTransformerAdapter(nn.Module):
         x = self.adapt_tokens(encoder_tokens, input_info)
 
         x = self.proj_dec(x)
-        cls_emb = self.cls_emb.expand(x.shape[0], -1, -1)
-        x = torch.cat((x, cls_emb), 1)
 
         for blk in self.blocks:
             x = blk(x)
 
         x = self.decoder_norm(x)
 
-        patches = self.patch_proj(x[:, :-self.num_classes])
-        cls_seg_feat = self.classes_proj(x[:, -self.num_classes:])
+        patches = self.patch_proj(x[:, 1+self.task_specific_prompt_length:,:])
+        cls_seg_feat = self.classes_proj(x[:, :self.task_specific_prompt_length, : ])
 
         patches = F.normalize(patches, dim=2, p=2)
         cls_seg_feat = F.normalize(cls_seg_feat, dim=2, p=2)
@@ -576,14 +570,15 @@ class ConvNeXtAdapter(nn.Module):
         # self.self_attention1 = CrossMultiHeadAttention(embed_dim= self.dim_tokens_enc , num_heads= 8 )
      
         self.norm1 = nn.LayerNorm(self.task_specific_prompt_length)
-        
+        self.norm2 = nn.LayerNorm([160,160])
+        self.cross_attention = CrossAttention(dim= 384 ,attn_drop=0.1)
         #blocks
         self.blocks = nn.Sequential(*[
-            ConvNeXtBlock(dim=self.task_specific_prompt_length)
+            ConvNeXtBlock(dim=self.class_dim )
             for _ in range(depth)
         ])
 
-        self.final_layer = nn.Conv2d(self.task_specific_prompt_length, self.num_classes, 1)
+        self.final_layer = nn.Conv2d(self.class_dim ,self.num_classes, 1)
         self.apply(self._init_weights)
         
     def init(self, dim_tokens_enc: int = 768 
@@ -600,9 +595,8 @@ class ConvNeXtAdapter(nn.Module):
         self.proj_dec = nn.Linear(self.in_channels, self.embed_dim,bias = False)
         self._init_weights(self.proj_dec)
         
-
-        self.proj_patch = nn.Linear(self.embed_dim, self.embed_dim, bias=False)
-        self.proj_classes = nn.Linear(self.embed_dim, self.embed_dim, bias=False)
+        # self.proj_patch = nn.Linear(self.embed_dim, self.embed_dim, bias=False)
+        # self.proj_classes = nn.Linear(self.embed_dim, self.embed_dim, bias=False)
         # # Task specific prompts
         # self.task_specific_prompts = nn.Parameter(torch.rand(1,self.task_specific_prompt_length
         # ,dim_tokens_enc))
@@ -650,46 +644,51 @@ class ConvNeXtAdapter(nn.Module):
             
             final_prompts = self.out_projection(context) # B x promt_length(25) x 768
                 
-        else : #self attention
+        # else : #self attention
             
-            # if self.num_classes == 1: #depth
-            #     task_original_prompts = x[:,:self.task_specific_prompt_length,:]
-            #     x= x[:,2*self.task_specific_prompt_length:,:]
-            #     x = torch.cat([x[:,:self.task_specific_prompt_length,:] , x[:,2*self.task_specific_prompt_length:,:]], dim = 1) # B , task_prompt_not_origin + image ,768
-            #     x[:,:self.task_specific_prompt_length,:] +=  task_original_prompts
-            #     # B , task_prompt_residual + image ,768
-            #     x = self.norm1(x)
+        #     # if self.num_classes == 1: #depth
+        #     #     task_original_prompts = x[:,:self.task_specific_prompt_length,:]
+        #     #     x= x[:,2*self.task_specific_prompt_length:,:]
+        #     #     x = torch.cat([x[:,:self.task_specific_prompt_length,:] , x[:,2*self.task_specific_prompt_length:,:]], dim = 1) # B , task_prompt_not_origin + image ,768
+        #     #     x[:,:self.task_specific_prompt_length,:] +=  task_original_prompts
+        #     #     # B , task_prompt_residual + image ,768
+        #     #     x = self.norm1(x)
             
-            if self.num_classes == 40 :  #semseg
-                # task_original_prompts = x[:,: self.task_specific_prompt_length,:]
-                # x= x[:, 1 + total_prompt_length + self.task_specific_prompt_length:,:]
-                x = torch.cat([x[:, : self.task_specific_prompt_length,:] ,  x[:,total_prompt_length + self.task_specific_prompt_length:,:]], dim = 1)
-                # x[:,:self.task_specific_prompt_length,:] +=  task_original_prompts
-              
+        #     if self.num_classes == 40 :  #semseg
+        #         # task_original_prompts = x[:,: self.task_specific_prompt_length,:]
+        #         # x= x[:,total_prompt_length:,:]
+        #         # x = torch.cat([x[:, : self.task_specific_prompt_length,:] ,  x[:,self.task_specific_prompt_length:,:]], dim = 1)
+        #         # x[:,:self.task_specific_prompt_length,:] +=  task_original_prompts
+             
         x = self.proj_dec(x)
-        
-        patch = x[:,1 + self.task_specific_prompt_length:,:]
-        prompt =x[:,:self.task_specific_prompt_length,:] 
+        x =x[:,1:,:]  
+        # patch = x[:,1 + self.task_specific_prompt_length:,:]
+        # prompt =x[:,:self.task_specific_prompt_length,:] 
 
-        patch = self.proj_patch(patch)
-        prompt = self.proj_classes(prompt)
+        # patch = self.proj_patch(patch)
+        # prompt = self.proj_classes(prompt)
         
-        x = patch @ prompt.transpose(1,2)
-        x = self.norm1(x)
-        x = rearrange(x, "b (nh nw) c -> b c nh nw", nh=N_H, nw=N_W)
-        # x = rearrange(x, "b n (p c) -> b (n p) c", n=N_H * N_W, p=self.preds_per_patch, c=self.class_dim)
-        # x = rearrange(x, "b (nh nw ph pw) c -> b c (nh ph) (nw pw)",
-        #                 nh=N_H, nw=N_W,
-        #                 ph=int(self.preds_per_patch ** 0.5),
-        #                 pw=int(self.preds_per_patch ** 0.5))
+        # x = patch @ prompt.transpose(1,2)
+        # x = self.norm1(x)
         
+        # x = rearrange(x, "b (nh nw) c -> b c nh nw", nh=N_H, nw=N_W)
+
+        x = rearrange(x, "b n (p c) -> b (n p) c", n=N_H * N_W, p=self.preds_per_patch, c=self.class_dim) # b 160*160 384
+
+        x = rearrange(x, "b (nh nw ph pw) c -> b c (nh ph) (nw pw)",
+                        nh=N_H, nw=N_W,
+                        ph=int(self.preds_per_patch ** 0.5),
+                        pw=int(self.preds_per_patch ** 0.5))
+        
+        x = self.norm2(x)
         x = self.blocks(x)
-        x = self.final_layer(x)
+        # x = self.norm2(x)
+        x = self.final_layer(x) # B 40 160 160  , prompt = B 40 6144
         
         # Interpolate to semseg res
         x = F.interpolate(x, size=(H, W), mode=self.interpolate_mode )
-
-        return x
+    
+        return x 
 
 class DPTOutputAdapter(nn.Module):
     """DPT output adapter.

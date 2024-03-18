@@ -156,7 +156,7 @@ class Mlp(nn.Module):
 
 
 class Attention(nn.Module):
-    def __init__(self, prompt_size : int, use_prompt_mask : bool , dim, input_image = 336 ,  num_heads=8, qkv_bias=False, attn_drop=0., proj_drop=0.,):
+    def __init__(self, prompt_size : int, use_prompt_mask : bool , dim, input_image = 336 ,  num_heads=8, qkv_bias=False, attn_drop=0.0, proj_drop=0.0,):
         super().__init__()
         self.num_heads = num_heads
         head_dim = dim // num_heads
@@ -180,7 +180,7 @@ class Attention(nn.Module):
           
         # if self.use_prompt_mask :
         #     mask = torch.zeros_like(attn)
-        #     mask[:, :,  : , : self.prompt_size] = float("-1e4")
+        #     mask[:, :,  self.prompt_size : , : self.prompt_size] = float("-inf")
             
         #     # 마스크 적용
         #     attn = attn + mask

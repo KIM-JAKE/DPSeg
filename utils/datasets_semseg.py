@@ -23,7 +23,7 @@ except:
     print('albumentations not installed')
 import cv2
 import torch.nn.functional as F
-
+from utils.copy_paste import CopyPaste
 from utils import (IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD, PAD_MASK_VALUE,
                    SEG_IGNORE_INDEX)
 

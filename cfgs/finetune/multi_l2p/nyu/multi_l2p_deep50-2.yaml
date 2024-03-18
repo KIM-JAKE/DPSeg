@@ -13,22 +13,22 @@ patch_size: 16
 num_global_tokens: 1
 drop_path_encoder: 0.1
 output_adapter: convnext
-decoder_dim: 2048
+decoder_dim: -0.000005
 decoder_preds_per_patch: 16
 decoder_depth: 4
 
 # Train
-epochs: 400
+epochs: 300
 opt: adamw
-lr: 0.0001 # = 1e-4
-warmup_lr: 0.000001 # = 1e-6
+lr: 0.00005 # = 1e-4
+warmup_lr: 0.000005 # = 1e-6
 min_lr: 0.
-warmup_epochs: 40
+warmup_epochs: 1
 batch_size: 2
 input_size: 640
 layer_decay: 0.75
-weight_decay: 0.25
-open_layer : 'encoder.5'
+weight_decay: 0.05
+open_layer : None
 
 # Augmentation
 aug_name: simple
@@ -61,7 +61,7 @@ use_prompt_mask : True
 log_wandb: True # Set to True to log to Weights & Biases
 wandb_project: 'promptmae-test'
 wandb_entity: null # Change if needed
-wandb_run_name: 'vpt-semseg-lr=0.0001-enc=5-segmenter=160-dd=2048'
+wandb_run_name: 'fft_pseudo_semseg_modality_pl=160-convnext-mask2_proj-480-dd=-0.000005'
 log_images_wandb: False
 log_images_freq: 20
-output_dir: '/root/workspace/Results/vpt-semseg-lr=0.0001-enc=5-segmenter=160-dd=2048'
+output_dir: '/root/workspace/Results/fft_pseudo_semseg_modality_pl=160-convnext-mask2_proj-480-dd=-0.000005'
