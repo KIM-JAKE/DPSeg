@@ -174,7 +174,7 @@ class Attention(nn.Module):
         B, N, C = x.shape
         qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
         q, k, v = qkv.unbind(0)   # make torchscript happy (cannot use tensor as tuple)
-        
+        q = q[:,:,self.prompt_size:,:]
         attn = (q @ k.transpose(-2, -1)) * self.scale
         #   # 마스크 생성: 프롬프트는 이미지에 영향을 주지 않도록 설정
           
@@ -189,7 +189,7 @@ class Attention(nn.Module):
         attn = attn.softmax(dim=-1)
         attn = self.attn_drop(attn)
 
-        x = (attn @ v).transpose(1, 2).reshape(B, N, C)
+        x = (attn @ v).transpose(1, 2).reshape(B, N-(self.prompt_size), C)
         x = self.proj(x)
         x = self.proj_drop(x)
         return x
@@ -241,7 +241,7 @@ class Block(nn.Module):
         self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
 
     def forward(self, x):
-        x = x + self.drop_path(self.attn(self.norm1(x)))
+        x = x[:,self.prompt_size:,:] + self.drop_path(self.attn(self.norm1(x)))
         x = x + self.drop_path(self.mlp(self.norm2(x)))
         return x
 

@@ -597,15 +597,35 @@ class MultiViT(MultiMAE):
                     prompt = input_tokens[:,:self.task_specific_prompt_length,:]
                     input_tokens = input_tokens[:,self.task_specific_prompt_length:,:]
 
+<<<<<<< HEAD
                     prompt = self.prompt_dropout(prompt)
                 
                     input_tokens = torch.cat([ prompt , input_tokens ] , dim = 1)
+=======
+                    task1_prompt_pool = prompt_instance( task1_tokens)['prompted_embedding'][:,:prompt_input_size,:]
+                    # task2_prompt_pool = prompt_instance( task2_tokens)['prompted_embedding'][:,:prompt_input_size,:]
+                    
+                    # depth_idx_list = prompt_instance( task1_tokens)['prompt_idx']
+                    # seg_idx_list  = prompt_instance( task2_tokens)['prompt_idx']
+                    
+                    #Plot which idx selected 
+                    #self.plot_index_distribution(seg_idx_list[i], depth_idx_list[i], title=f'Layer {i} Prompt Index Distribution', filename=f'layer_{i}_distribution.png')
+                    
+                    task1_prompt_pool = self.prompt_dropout(task1_prompt_pool)
+                    
+                    if i == 5 : 
+                        input_tokens = torch.cat([ task1_prompt_pool , input_tokens ] , dim = 1)
+>>>>>>> refs/remotes/origin/master
                         
                     input_tokens = layer(input_tokens)     
                 else : 
                     input_tokens = input_tokens[:,self.task_specific_prompt_length: , :]
                             
+<<<<<<< HEAD
             encoder_tokens =  torch.cat([ input_tokens] , dim = 1 )
+=======
+            encoder_tokens =  torch.cat([expanded_prompts_1 ,task1_prompt_pool , input_tokens] , dim = 1 )
+>>>>>>> refs/remotes/origin/master
             
         # Decode tokens for each task using task-specific output adapters
         preds = {

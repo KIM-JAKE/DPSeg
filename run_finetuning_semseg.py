@@ -33,6 +33,7 @@ import yaml
 
 from utils.focal_loss import FocalLoss
 import utils
+from utils.focal_loss import FocalLoss
 import utils.data_constants as data_constants
 from multimae import multimae_l2p
 from multimae.input_adapters import PatchedInputAdapter, SemSegInputAdapter, PromptPatchedInputAdapter
@@ -536,6 +537,7 @@ def main(args):
         args.weight_decay, args.weight_decay_end, args.epochs, num_training_steps_per_epoch)
     print("Max WD = %.7f, Min WD = %.7f" % (max(wd_schedule_values), min(wd_schedule_values)))
 
+<<<<<<< HEAD
     alpha = torch.tensor([0.0018, 0.0023, 0.0040, 0.0041, 0.0067, 0.0064, 0.0085, 0.0079, 0.0079,
          0.0093, 0.0130, 0.0100, 0.0147, 0.0127, 0.0162, 0.0199, 0.0165, 0.0163,
          0.0280, 0.0184, 0.0128, 0.0262, 0.0295, 0.0256, 0.0401, 0.0512, 0.0483,
@@ -548,6 +550,10 @@ def main(args):
     # criterion = FocalLoss(alpha = alpha.to('cuda:0'))
     criterion = torch.nn.CrossEntropyLoss(ignore_index=255 ,weight= alpha.to('cuda:0'))
     # criterion = torch.nn.CrossEntropyLoss(ignore_index=255)
+=======
+    criterion = FocalLoss()
+
+>>>>>>> refs/remotes/origin/master
     print("criterion = %s" % str(criterion))
 
     # Specifies if transformer encoder should only return last layer or all layers for DPT
