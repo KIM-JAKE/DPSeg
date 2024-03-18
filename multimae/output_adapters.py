@@ -569,7 +569,6 @@ class ConvNeXtAdapter(nn.Module):
         #For attention (prompt pool + task specific prompt)
         # self.self_attention1 = CrossMultiHeadAttention(embed_dim= self.dim_tokens_enc , num_heads= 8 )
      
-<<<<<<< HEAD
         self.norm1 = nn.LayerNorm(self.task_specific_prompt_length)
         self.norm2 = nn.LayerNorm([160,160])
         self.cross_attention = CrossAttention(dim= 384 ,attn_drop=0.1)
@@ -580,17 +579,6 @@ class ConvNeXtAdapter(nn.Module):
         ])
 
         self.final_layer = nn.Conv2d(self.class_dim ,self.num_classes, 1)
-=======
-        self.norm1 = nn.LayerNorm(self.class_dim)
-        
-        #blocks
-        self.blocks = nn.Sequential(*[
-            ConvNeXtBlock(dim=self.class_dim)
-            for _ in range(depth)
-        ])
-
-        self.final_layer = nn.Conv2d(self.class_dim, self.num_classes, 1)
->>>>>>> refs/remotes/origin/master
         self.apply(self._init_weights)
         
     def init(self, dim_tokens_enc: int = 768 
@@ -607,11 +595,8 @@ class ConvNeXtAdapter(nn.Module):
         self.proj_dec = nn.Linear(self.in_channels, self.embed_dim,bias = False)
         self._init_weights(self.proj_dec)
         
-<<<<<<< HEAD
         # self.proj_patch = nn.Linear(self.embed_dim, self.embed_dim, bias=False)
         # self.proj_classes = nn.Linear(self.embed_dim, self.embed_dim, bias=False)
-=======
->>>>>>> refs/remotes/origin/master
         # # Task specific prompts
         # self.task_specific_prompts = nn.Parameter(torch.rand(1,self.task_specific_prompt_length
         # ,dim_tokens_enc))
@@ -669,7 +654,6 @@ class ConvNeXtAdapter(nn.Module):
         #     #     # B , task_prompt_residual + image ,768
         #     #     x = self.norm1(x)
             
-<<<<<<< HEAD
         #     if self.num_classes == 40 :  #semseg
         #         # task_original_prompts = x[:,: self.task_specific_prompt_length,:]
         #         # x= x[:,total_prompt_length:,:]
@@ -678,16 +662,6 @@ class ConvNeXtAdapter(nn.Module):
              
         x = self.proj_dec(x)
         x =x[:,1:,:]  
-=======
-            if self.num_classes == 40 :  #semseg
-                # task_original_prompts = x[:,: self.task_specific_prompt_length,:]
-                # x= x[:, 1 + total_prompt_length + self.task_specific_prompt_length:,:]
-                x = torch.cat([x[:, : self.task_specific_prompt_length,:] ,  x[:,1+total_prompt_length + self.task_specific_prompt_length:,:]], dim = 1)
-                # x[:,:self.task_specific_prompt_length,:] +=  task_original_prompts
-              
-        x = self.proj_dec(x)
-        
->>>>>>> refs/remotes/origin/master
         # patch = x[:,1 + self.task_specific_prompt_length:,:]
         # prompt =x[:,:self.task_specific_prompt_length,:] 
 
@@ -696,17 +670,6 @@ class ConvNeXtAdapter(nn.Module):
         
         # x = patch @ prompt.transpose(1,2)
         # x = self.norm1(x)
-<<<<<<< HEAD
-=======
-        # x = rearrange(x, "b (nh nw) c -> b c nh nw", nh=N_H, nw=N_W)
-        x = x[:,self.task_specific_prompt_length :,:]
-        
-        x = rearrange(x, "b n (p c) -> b (n p) c", n=N_H * N_W, p=self.preds_per_patch, c=self.class_dim)
-        x = rearrange(x, "b (nh nw ph pw) c -> b c (nh ph) (nw pw)",
-                        nh=N_H, nw=N_W,
-                        ph=int(self.preds_per_patch ** 0.5),
-                        pw=int(self.preds_per_patch ** 0.5))
->>>>>>> refs/remotes/origin/master
         
         # x = rearrange(x, "b (nh nw) c -> b c nh nw", nh=N_H, nw=N_W)
 
