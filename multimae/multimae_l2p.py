@@ -78,7 +78,7 @@ class MultiMAE(nn.Module):
                  drop_rate: float = 0.0,
                  attn_drop_rate: float = 0.0,
                  drop_path_rate: float = 0.0,
-                 prompt_dropout_rate : float = 0.0 ,
+                 prompt_dropout_rate : float = 0. ,
                  norm_layer: nn.Module = partial(nn.LayerNorm, eps=1e-6),**kwargs):
         super().__init__()
 
@@ -105,15 +105,15 @@ class MultiMAE(nn.Module):
 
         self.task_specific_prompts_1 = nn.Parameter(torch.rand(1, self.task_specific_prompt_length, self.dim_tokens))
         # self.task_specific_prompts_2 = nn.Parameter(torch.rand(1, self.task_specific_prompt_length, self.dim_tokens))  
-        nn.init.xavier_uniform_(self.task_specific_prompts_1)
+        self.task_specific_prompts_1 = nn.init.kaiming_normal_(self.task_specific_prompts_1)
         # # 첫 번째 프롬프트는 -1.0에서 1.0 사이의 값으로 초기화
         # # 두 번째 프롬프트는 -0.01에서 0.01 사이의 매우 작은 값으로 초기화
         # nn.init.uniform_(self.task_specific_prompts_2, a=-0.01, b=0.01)
-        self.mlp = Mlp(in_features= 768 , hidden_features= 4* 768 , out_features= 768 )
+        # self.mlp_1 = Mlp(in_features= 768 , hidden_features= 4* 768 , out_features= 768 , drop = 0.1 )
+        self.mlp_2 = Mlp(in_features= 768 , hidden_features= 4* 768 , out_features= 768 , drop = 0.1 )
         # self.prompt_emb = nn.Linear(768,768, bias=False) 
         self.norm_first = nn.LayerNorm(768)
         #learnable weight
-        # self.raw_parameter_seg = torch.nn.Parameter(torch.tensor(0.6))
         # self.raw_parameter_depth = torch.nn.Parameter(torch.tensor(0.6))
         # self.extra_module = extra_module()
         #prompts
@@ -578,7 +578,7 @@ class MultiViT(MultiMAE):
         
         global_tokens = self.global_tokens.expand(input_tokens.size(0), -1, -1)
         expanded_prompts_1 = self.task_specific_prompts_1.expand(input_tokens.size(0), -1, -1)
-        expanded_prompts_1 = self.mlp(expanded_prompts_1)
+
         # expanded_prompts_2 = self.task_specific_prompts_2.expand(input_tokens.size(0), -1, -1)
         
         # original_prompts = torch.cat([expanded_prompts_1, expanded_prompts_2], dim=1)
@@ -592,7 +592,7 @@ class MultiViT(MultiMAE):
         if self.prompt_deep:
                 
             for i, layer in enumerate(self.encoder):
-                if 0 <= i < 6  :
+                if 0 <= i < 12  :
 
                     prompt = input_tokens[:,:self.task_specific_prompt_length,:]
                     input_tokens = input_tokens[:,self.task_specific_prompt_length:,:]
@@ -602,10 +602,17 @@ class MultiViT(MultiMAE):
                     input_tokens = torch.cat([ prompt , input_tokens ] , dim = 1)
                         
                     input_tokens = layer(input_tokens)     
-                else : 
-                    input_tokens = input_tokens[:,self.task_specific_prompt_length: , :]
-                            
-            encoder_tokens =  torch.cat([ input_tokens] , dim = 1 )
+                else:
+                    input_tokens = layer(input_tokens)
+                    
+            prompt = input_tokens[:,:self.task_specific_prompt_length,:]
+            
+            prompt = (self.mlp_2(prompt) + prompt)
+            
+            prompt = self.norm_first(prompt)
+            
+            input_tokens = input_tokens[:,self.task_specific_prompt_length:,:]
+            encoder_tokens =  torch.cat([prompt, input_tokens] , dim = 1 )
             
         # Decode tokens for each task using task-specific output adapters
         preds = {

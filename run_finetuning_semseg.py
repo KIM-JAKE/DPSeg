@@ -31,9 +31,9 @@ import torch.distributed as dist
 import torch.nn.functional as F
 import yaml
 
-from utils.focal_loss import FocalLoss
+from utils.focal_loss import FocalLoss, label_to_one_hot_label
 import utils
-from utils.focal_loss import FocalLoss
+from utils.lovasz_loss import lovasz_softmax 
 import utils.data_constants as data_constants
 from multimae import multimae_l2p
 from multimae.input_adapters import PatchedInputAdapter, SemSegInputAdapter, PromptPatchedInputAdapter
@@ -536,18 +536,32 @@ def main(args):
     wd_schedule_values = utils.cosine_scheduler(
         args.weight_decay, args.weight_decay_end, args.epochs, num_training_steps_per_epoch)
     print("Max WD = %.7f, Min WD = %.7f" % (max(wd_schedule_values), min(wd_schedule_values)))
-
+    
     alpha = torch.tensor([0.0018, 0.0023, 0.0040, 0.0041, 0.0067, 0.0064, 0.0085, 0.0079, 0.0079,
          0.0093, 0.0130, 0.0100, 0.0147, 0.0127, 0.0162, 0.0199, 0.0165, 0.0163,
          0.0280, 0.0184, 0.0128, 0.0262, 0.0295, 0.0256, 0.0401, 0.0512, 0.0483,
          0.0431, 0.0472, 0.0477, 0.0608, 0.0437, 0.0677, 0.0621, 0.0780, 0.0726,
          0.0073, 0.0076, 0.0033, 0.0008])
+        
     for k in range(len(alpha)) :
-        if alpha[k] < 0.01 :
-            alpha[k] = 0.01
+        if alpha[k] < 0.03 :
+            alpha[k] = 0.03
+
+
+    def custom_loss(preds,target) :
+                
+        fcl = FocalLoss(ignore_index=255)
+        fc_loss = fcl(preds,target)
+        mse = torch.nn.MSELoss()
+        target = label_to_one_hot_label(target , 40 , 'cuda:0' )
+        mse_loss = mse(preds,target)
+        
+        loss = fc_loss * 20 + mse_loss
+        
+        return loss
     
     # criterion = FocalLoss(alpha = alpha.to('cuda:0'))
-    criterion = torch.nn.CrossEntropyLoss(ignore_index=255 ,weight= alpha.to('cuda:0'))
+    criterion = custom_loss
     # criterion = torch.nn.CrossEntropyLoss(ignore_index=255)
     print("criterion = %s" % str(criterion))
 
@@ -589,7 +603,7 @@ def main(args):
             max_norm=args.clip_grad, log_writer=log_writer, start_steps=epoch * num_training_steps_per_epoch,
             lr_schedule_values=lr_schedule_values, wd_schedule_values=wd_schedule_values, in_domains=args.in_domains,
             fp16=args.fp16, return_all_layers=return_all_layers
-        )
+        )        
         if args.output_dir and args.save_ckpt:
             if (epoch + 1) % args.save_ckpt_freq == 0 or epoch + 1 == args.epochs:
                 utils.save_model(

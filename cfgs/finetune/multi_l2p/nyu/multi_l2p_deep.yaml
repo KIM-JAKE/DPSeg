@@ -13,29 +13,21 @@ patch_size: 16
 num_global_tokens: 1
 drop_path_encoder: 0.1
 output_adapter: convnext
-<<<<<<< HEAD
-decoder_dim: 768
-=======
 decoder_dim: 6144
->>>>>>> refs/remotes/origin/master
 decoder_preds_per_patch: 16
-decoder_depth: 2
+decoder_depth: 4
 
 # Train
-epochs: 400
+epochs: 300
 opt: adamw
 lr: 0.000025 # = 1e-4
 warmup_lr: 0.00000025 # = 1e-6
 min_lr: 0.
 warmup_epochs: 1
-<<<<<<< HEAD
 batch_size: 2
-=======
-batch_size: 4
->>>>>>> refs/remotes/origin/master
 input_size: 640
 layer_decay: 0.75
-weight_decay: 0.05
+weight_decay: 0.1
 open_layer : None
 
 # Augmentation
@@ -61,7 +53,7 @@ prompt_deep : True
 top_k : 5
 size : 5
 length : 5 
-task_specific_prompt_length : 300
+task_specific_prompt_length : 225
 not_self_attn : False
 use_prompt_mask : True
 
@@ -69,14 +61,7 @@ use_prompt_mask : True
 log_wandb: True # Set to True to log to Weights & Biases
 wandb_project: 'promptmae-test'
 wandb_entity: null # Change if needed
-<<<<<<< HEAD
-wandb_run_name: 'fft-learnable_modality_masking-convnext_with_wce+0~5'
+wandb_run_name: 'fft-learnable_modality-convnext-mlp-225-cl-t'
 log_images_wandb: False
 log_images_freq: 20
-output_dir: '/root/workspace/Results/fft-learnable_modality_masking-convnext_with_wce+0~5'
-=======
-wandb_run_name: 'vpt-semseg-lr=0.0001-enc=5-kv'
-log_images_wandb: False
-log_images_freq: 20
-output_dir: '/root/workspace/Results/vpt-semseg-lr=0.0001-enc=5-kv'
->>>>>>> refs/remotes/origin/master
+output_dir: '/root/workspace/Results/fft-learnable_modality-convnext-mlp-225-cl-t'

@@ -24,7 +24,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange, repeat
 
-from .multimae_utils import (Block, CrossAttention, Mlp,
+from .multimae_utils import (Block, CrossAttention, Mlp, Attention, 
                              build_2d_sincos_posemb, pair, trunc_normal_)
 from .output_adapter_utils import (ConvNeXtBlock, Interpolate,
                                    make_fusion_block, make_scratch)
@@ -569,9 +569,10 @@ class ConvNeXtAdapter(nn.Module):
         #For attention (prompt pool + task specific prompt)
         # self.self_attention1 = CrossMultiHeadAttention(embed_dim= self.dim_tokens_enc , num_heads= 8 )
      
-        self.norm1 = nn.LayerNorm(self.task_specific_prompt_length)
+        self.norm1 = nn.LayerNorm(self.dim_tokens_enc)
         self.norm2 = nn.LayerNorm([160,160])
-        self.cross_attention = CrossAttention(dim= 384 ,attn_drop=0.1)
+        self.cross_attention = CrossAttention(dim= 768 ,attn_drop=0.1)
+
         #blocks
         self.blocks = nn.Sequential(*[
             ConvNeXtBlock(dim=self.class_dim )
@@ -659,17 +660,16 @@ class ConvNeXtAdapter(nn.Module):
         #         # x= x[:,total_prompt_length:,:]
         #         # x = torch.cat([x[:, : self.task_specific_prompt_length,:] ,  x[:,self.task_specific_prompt_length:,:]], dim = 1)
         #         # x[:,:self.task_specific_prompt_length,:] +=  task_original_prompts
-             
-        x = self.proj_dec(x)
-        x =x[:,1:,:]  
-        # patch = x[:,1 + self.task_specific_prompt_length:,:]
-        # prompt =x[:,:self.task_specific_prompt_length,:] 
-
-        # patch = self.proj_patch(patch)
-        # prompt = self.proj_classes(prompt)
         
-        # x = patch @ prompt.transpose(1,2)
-        # x = self.norm1(x)
+        # query = x[:,self.task_specific_prompt_length:,:] # B 1600+1 786
+        # key_value = x[:,:self.task_specific_prompt_length,:] # B 300 786
+        # x = self.cross_attention(query,key_value) # B 1600+1 786    
+        # x = self.norm1(x + query)
+        
+        x = self.proj_dec(x)
+        x = x[:,1 + self.task_specific_prompt_length: ,:]
+    
+        # prompt =x[:,:self.task_specific_prompt_length,:]
         
         # x = rearrange(x, "b (nh nw) c -> b c nh nw", nh=N_H, nw=N_W)
 
@@ -680,14 +680,12 @@ class ConvNeXtAdapter(nn.Module):
                         ph=int(self.preds_per_patch ** 0.5),
                         pw=int(self.preds_per_patch ** 0.5))
         
-        x = self.norm2(x)
         x = self.blocks(x)
-        # x = self.norm2(x)
+        x = self.norm2(x)
         x = self.final_layer(x) # B 40 160 160  , prompt = B 40 6144
-        
-        # Interpolate to semseg res
+
         x = F.interpolate(x, size=(H, W), mode=self.interpolate_mode )
-    
+
         return x 
 
 class DPTOutputAdapter(nn.Module):
