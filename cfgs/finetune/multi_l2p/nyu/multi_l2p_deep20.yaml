@@ -13,15 +13,15 @@ patch_size: 16
 num_global_tokens: 1
 drop_path_encoder: 0.1
 output_adapter: convnext
-decoder_dim: 512
+decoder_dim: 6144
 decoder_preds_per_patch: 16
 decoder_depth: 4
 
 # Train
 epochs: 300
 opt: adamw
-lr: 0.00001 # = 1e-4
-warmup_lr: 0.000001 # = 1e-6
+lr: 0.000035 # = 1.5e-5
+warmup_lr: 0.00000035 # = 1e-6
 min_lr: 0.
 warmup_epochs: 1
 batch_size: 2
@@ -53,15 +53,15 @@ prompt_deep : True
 top_k : 5
 size : 5
 length : 5 
-task_specific_prompt_length : 160
+task_specific_prompt_length : 100
 not_self_attn : False
 use_prompt_mask : True
 
 # Wandb and logging
 log_wandb: True # Set to True to log to Weights & Biases
-wandb_project: 'promptmae-test'
+wandb_project: 'missing modality ablation'
 wandb_entity: null # Change if needed
-wandb_run_name: 'fft_pseudo_semseg_modality_pl=160-convnext-mask2_proj-640-dd=512-1e-6'
+wandb_run_name: '100-3e-5-0.05'
 log_images_wandb: False
 log_images_freq: 20
-output_dir: '/root/workspace/Results/fft_pseudo_semseg_modality_pl=160-convnext-mask2_proj-480-dd=512-1e-6'
+output_dir: '/root/workspace/Results/100-3e-5-0.05'

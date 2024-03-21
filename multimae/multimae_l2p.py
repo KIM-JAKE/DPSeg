@@ -27,7 +27,7 @@ from torch.distributions.dirichlet import Dirichlet
 from torch.nn import Dropout
 from utils.registry import register_model
 
-from .multimae_utils import Block, trunc_normal_ , Mlp
+from .multimae_utils import Block, trunc_normal_ , Mlp , CrossAttention
 
 __all__ = [
     'pretrain_multimae_base',
@@ -82,6 +82,7 @@ class MultiMAE(nn.Module):
                  norm_layer: nn.Module = partial(nn.LayerNorm, eps=1e-6),**kwargs):
         super().__init__()
 
+        self.dim_tokens = dim_tokens
         self.use_prompt_mask = use_prompt_mask
         self.prompt_shallow = prompt_shallow
         self.prompt_deep = prompt_deep
@@ -92,7 +93,7 @@ class MultiMAE(nn.Module):
         self.dim_tokens = dim_tokens
         self.prompt_dropout_rate = prompt_dropout_rate
         self.task_specific_prompt_length = task_specific_prompt_length
-        self.prompt_proj = nn.Identity()
+        
         
         # self.prompt_emb1= nn.Linear(self.dim_tokens,  self.dim_tokens )
         # self.prompt_emb2= nn.Linear(4 * self.dim_tokens, self.dim_tokens )
@@ -104,32 +105,13 @@ class MultiMAE(nn.Module):
         self.prompt_dropout = Dropout(self.prompt_dropout_rate)
 
         self.task_specific_prompts_1 = nn.Parameter(torch.rand(1, self.task_specific_prompt_length, self.dim_tokens))
-        # self.task_specific_prompts_2 = nn.Parameter(torch.rand(1, self.task_specific_prompt_length, self.dim_tokens))  
         self.task_specific_prompts_1 = nn.init.kaiming_normal_(self.task_specific_prompts_1)
-        # # 첫 번째 프롬프트는 -1.0에서 1.0 사이의 값으로 초기화
-        # # 두 번째 프롬프트는 -0.01에서 0.01 사이의 매우 작은 값으로 초기화
-        # nn.init.uniform_(self.task_specific_prompts_2, a=-0.01, b=0.01)
-        # self.mlp_1 = Mlp(in_features= 768 , hidden_features= 4* 768 , out_features= 768 , drop = 0.1 )
-        self.mlp_2 = Mlp(in_features= 768 , hidden_features= 4* 768 , out_features= 768 , drop = 0.1 )
-        # self.prompt_emb = nn.Linear(768,768, bias=False) 
-        self.norm_first = nn.LayerNorm(768)
-        #learnable weight
-        # self.raw_parameter_depth = torch.nn.Parameter(torch.tensor(0.6))
-        # self.extra_module = extra_module()
-        #prompts
-        # self.prompt = Prompt(length=self.prompt_length, embed_dim=self.dim_tokens, prompt_pool=self.prompt_pool,
-        #                          top_k=self.top_k, pool_size=self.pool_size)
-        # if self.prompt_pool:
-        #     if self.prompt_deep:
-        #         self.layer_prompt_pools = nn.ModuleList([
-        #             Prompt(length=prompt_length, 
-        #                   embed_dim=dim_tokens, 
-        #                   pool_size=pool_size,
-        #                   prompt_pool=True,
-        #                   top_k=top_k)
-        #             for _ in range(12)  # 각 레이어에 대응하는 프롬프트 풀 초기화
-        #         ])
 
+        self.mlp_2 = Mlp(in_features= 768 , hidden_features= 4* 768 , out_features= 768 , drop = 0.1 )
+        self.norm_first = nn.LayerNorm(768)
+        self.norm = nn.LayerNorm(768)
+        # For fusion
+    
         # Initialize input and output adapters
         for adapter in input_adapters.values():
             adapter.init(dim_tokens=dim_tokens,
@@ -485,18 +467,26 @@ def pretrain_multimae_large(
 
 import torch.nn.functional as F
 
-class extra_module(nn.Module):
-    def __init__(self, input_dim =768, output_dim = 192):
-        super(extra_module, self).__init__()
-        # 1D 컨볼루션을 사용하여 차원을 줄입니다.
-        self.conv1d = nn.Conv1d(in_channels=input_dim, out_channels=output_dim, kernel_size=1, stride=1)
+class MFA(nn.Module):  
+    def __init__(self):
+        super(MFA, self).__init__()
+        self.dim_tokens_enc = 768
 
-    def forward(self, x):
-        # (batch_size, seq_len, features) -> (batch_size, features, seq_len)으로 변경
-        x = x.permute(0, 2, 1)
-        x = self.conv1d(x)
-        x = x.permute(0, 2, 1)
-        x = F.interpolate(x, scale_factor=4,  mode='linear', align_corners=False)
+        self.prompt_emb = nn.Linear(self.dim_tokens_enc, self.dim_tokens_enc)
+        self.prompt_down = nn.Linear(self.dim_tokens_enc, self.dim_tokens_enc // 4)
+        self.image_down = nn.Linear(self.dim_tokens_enc, self.dim_tokens_enc // 4)
+        self.up_x = nn.Linear(self.dim_tokens_enc // 4, self.dim_tokens_enc)
+        self.cross_attn = CrossAttention(dim=self.dim_tokens_enc // 4)
+    
+    def forward(self, x, task_specific_prompt_length = 125):  # forward 메소드 정의
+        self.task_specific_prompt_length = task_specific_prompt_length
+        prompt = x[:, :self.task_specific_prompt_length, :]
+        prompt = self.prompt_emb(prompt)
+        prompt = self.prompt_down(prompt)
+        image = x[:, self.task_specific_prompt_length:, :]
+        image = self.image_down(image)
+        x = self.cross_attn(image, prompt)
+        x = self.up_x(x)
         return x
     
 class MultiViT(MultiMAE):
@@ -564,6 +554,20 @@ class MultiViT(MultiMAE):
         plt.savefig(filename)
         plt.close()
         
+        
+    def fusion(self ,x) :
+        
+        prompt = x[:,:self.task_specific_prompt_length,:]
+        prompt = self.prompt_emb(prompt)
+        prompt = self.prompt_down(prompt)
+        image = x[:,self.task_specific_prompt_length:,:]
+        image = self.image_down(image)
+        x = self.cross_attn(image, prompt)
+        x = x + image
+        
+        return x
+        
+        
     def forward(self, x: Union[Dict[str, torch.Tensor], torch.Tensor], return_all_layers=False, **kwargs):
         """
         Forward pass through input adapters, transformer encoder and output adapters.
@@ -578,41 +582,38 @@ class MultiViT(MultiMAE):
         
         global_tokens = self.global_tokens.expand(input_tokens.size(0), -1, -1)
         expanded_prompts_1 = self.task_specific_prompts_1.expand(input_tokens.size(0), -1, -1)
-
+        # expanded_prompts_1 = self.mlp_1(expanded_prompts_1)
         # expanded_prompts_2 = self.task_specific_prompts_2.expand(input_tokens.size(0), -1, -1)
         
         # original_prompts = torch.cat([expanded_prompts_1, expanded_prompts_2], dim=1)
         
         input_tokens = torch.cat([expanded_prompts_1 , global_tokens,  input_tokens ], dim = 1)
-        
+
         want_size = input_tokens.shape[1]
         
         # original_tokens = input_tokens
         
         if self.prompt_deep:
-                
+            
             for i, layer in enumerate(self.encoder):
                 if 0 <= i < 12  :
-
-                    prompt = input_tokens[:,:self.task_specific_prompt_length,:]
-                    input_tokens = input_tokens[:,self.task_specific_prompt_length:,:]
-
-                    prompt = self.prompt_dropout(prompt)
-                
-                    input_tokens = torch.cat([ prompt , input_tokens ] , dim = 1)
-                        
-                    input_tokens = layer(input_tokens)     
-                else:
-                    input_tokens = layer(input_tokens)
                     
-            prompt = input_tokens[:,:self.task_specific_prompt_length,:]
+                        prompt = input_tokens[:,:self.task_specific_prompt_length,:]
+                        input_tokens = input_tokens[:,self.task_specific_prompt_length:,:]
+                        prompt = self.prompt_dropout(prompt) # B prompt_length 768
+                    
+                        input_tokens = torch.cat([ prompt , input_tokens ] , dim = 1)
+                            
+                        input_tokens = layer(input_tokens)  
+
+            # prompt = input_tokens[:,:self.task_specific_prompt_length,:]
             
-            prompt = (self.mlp_2(prompt) + prompt)
+            input_tokens = self.norm(self.mlp_2(self.norm_first(input_tokens)) + input_tokens)
+
+            # input_tokens = input_tokens[:,self.task_specific_prompt_length:,:] 
+            # input_tokens = torch.cat([ prompt , input_tokens] , dim = 1 )  
             
-            prompt = self.norm_first(prompt)
-            
-            input_tokens = input_tokens[:,self.task_specific_prompt_length:,:]
-            encoder_tokens =  torch.cat([prompt, input_tokens] , dim = 1 )
+            encoder_tokens =  torch.cat([expanded_prompts_1 , input_tokens] , dim = 1 )
             
         # Decode tokens for each task using task-specific output adapters
         preds = {

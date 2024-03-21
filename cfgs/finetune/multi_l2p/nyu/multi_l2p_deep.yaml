@@ -20,7 +20,7 @@ decoder_depth: 4
 # Train
 epochs: 300
 opt: adamw
-lr: 0.000025 # = 1e-4
+lr: 0.000025 # = 1.5e-5
 warmup_lr: 0.00000025 # = 1e-6
 min_lr: 0.
 warmup_epochs: 1
@@ -59,9 +59,9 @@ use_prompt_mask : True
 
 # Wandb and logging
 log_wandb: True # Set to True to log to Weights & Biases
-wandb_project: 'promptmae-test'
+wandb_project: 'missing modality ablation'
 wandb_entity: null # Change if needed
-wandb_run_name: 'fft-learnable_modality-convnext-mlp-225-cl-t'
+wandb_run_name: '225-2.5e-5-cl-prompt_self_learning'
 log_images_wandb: False
 log_images_freq: 20
-output_dir: '/root/workspace/Results/fft-learnable_modality-convnext-mlp-225-cl-t'
+output_dir: '/root/workspace/Results/225-2.5e-5-cl-prompt_self_learning'

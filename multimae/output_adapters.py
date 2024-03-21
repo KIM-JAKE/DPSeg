@@ -24,7 +24,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange, repeat
 
-from .multimae_utils import (Block, CrossAttention, Mlp, Attention, 
+from .multimae_utils import (Block, CrossAttention, Mlp, Attention, DecoderBlock,
                              build_2d_sincos_posemb, pair, trunc_normal_)
 from .output_adapter_utils import (ConvNeXtBlock, Interpolate,
                                    make_fusion_block, make_scratch)
@@ -39,7 +39,7 @@ class SpatialOutputAdapter(nn.Module):
     :param patch_size_full: Int or tuple of the patch size over the full image size.
         Patch size for smaller inputs will be computed accordingly.
     :param dim_tokens_enc: Dimension of tokens coming from encoder. Can be set using init method.
-    :param dim_tokens: Dimension of decoder tokens
+    :param dim_tokens_enc: Dimension of decoder tokens
     :param depth: Number of additional (full self-attention) transformer layers after initial cross attention and MLP
     :param learnable_pos_emb: Set to True to learn positional embeddings instead
     :param image_size: Default image size. Used to initialize size of positional embeddings.
@@ -96,39 +96,39 @@ class SpatialOutputAdapter(nn.Module):
 
         if context_tasks is not None:
             self.task_embeddings = nn.ParameterDict(
-                {task: nn.Parameter(torch.zeros(1, 1, self.dim_tokens)) for task in context_tasks})
+                {task: nn.Parameter(torch.zeros(1, 1, self.dim_tokens_enc)) for task in context_tasks})
             for embedding in self.task_embeddings.values():
                 trunc_normal_(embedding, std=0.02)
 
-        self.mask_token = nn.Parameter(torch.zeros(1, 1, self.dim_tokens))
+        self.mask_token = nn.Parameter(torch.zeros(1, 1, self.dim_tokens_enc))
 
         # Fixed-size positional embeddings. Can be interpolated to different input sizes
         h_posemb = self.image_size[0] // (self.stride_level * self.P_H)
         w_posemb = self.image_size[1] // (self.stride_level * self.P_W)
         if not self.learnable_pos_emb:
-            self.pos_emb = build_2d_sincos_posemb(h=h_posemb, w=w_posemb, embed_dim=self.dim_tokens)
+            self.pos_emb = build_2d_sincos_posemb(h=h_posemb, w=w_posemb, embed_dim=self.dim_tokens_enc)
             self.pos_emb = nn.Parameter(self.pos_emb, requires_grad=False)
         else:
-            self.pos_emb = nn.Parameter(torch.zeros(1, h_posemb, w_posemb, self.dim_tokens))
+            self.pos_emb = nn.Parameter(torch.zeros(1, h_posemb, w_posemb, self.dim_tokens_enc))
             trunc_normal_(self.pos_emb, std=0.02)
 
         # One cross attention layer followed by MLP block, an optional transformer, and an output projection
         if self.use_xattn:
             self.decoder = CrossAttention(
-                dim=self.dim_tokens, num_heads=num_heads, qkv_bias=qkv_bias,
+                dim=self.dim_tokens_enc, num_heads=num_heads, qkv_bias=qkv_bias,
                 attn_drop=attn_drop_rate, proj_drop=drop_rate)
-            self.context_norm = norm_layer(self.dim_tokens)
-            self.query_norm = norm_layer(self.dim_tokens)
-            self.out_norm = norm_layer(self.dim_tokens)
+            self.context_norm = norm_layer(self.dim_tokens_enc)
+            self.query_norm = norm_layer(self.dim_tokens_enc)
+            self.out_norm = norm_layer(self.dim_tokens_enc)
 
-            mlp_hidden_dim = int(self.dim_tokens * mlp_ratio)
-            self.mlp = Mlp(in_features=self.dim_tokens, hidden_features=mlp_hidden_dim)
+            mlp_hidden_dim = int(self.dim_tokens_enc * mlp_ratio)
+            self.mlp = Mlp(in_features=self.dim_tokens_enc, hidden_features=mlp_hidden_dim)
 
         # Optional full self-attention transformer layers
         if depth > 0:
             dpr = [x.item() for x in torch.linspace(0, drop_path_rate, depth)]  # stochastic depth decay rule
             self.decoder_transformer = nn.Sequential(*[
-                Block(dim=self.dim_tokens, num_heads=num_heads, mlp_ratio=mlp_ratio, qkv_bias=qkv_bias, drop=drop_rate,
+                Block(dim=self.dim_tokens_enc, num_heads=num_heads, mlp_ratio=mlp_ratio, qkv_bias=qkv_bias, drop=drop_rate,
                       attn_drop=attn_drop_rate, drop_path=dpr[i], norm_layer=norm_layer)
                 for i in range(depth)
             ])
@@ -136,7 +136,7 @@ class SpatialOutputAdapter(nn.Module):
             self.decoder_transformer = nn.Identity()
 
         self.dim_patch = self.num_channels * self.P_H * self.P_W
-        self.out_proj = nn.Linear(self.dim_tokens, self.dim_patch)
+        self.out_proj = nn.Linear(self.dim_tokens_enc, self.dim_patch)
 
         if self.dim_tokens_enc is not None:
             self.init(dim_tokens_enc=dim_tokens_enc)
@@ -151,7 +151,7 @@ class SpatialOutputAdapter(nn.Module):
         self.dim_tokens_enc = dim_tokens_enc
 
         # Projection of encoder tokens to the patch dimension
-        self.proj_context = nn.Linear(self.dim_tokens_enc, self.dim_tokens)
+        self.proj_context = nn.Linear(self.dim_tokens_enc, self.dim_tokens_enc)
 
     @torch.jit.ignore
     def no_weight_decay(self):
@@ -166,7 +166,7 @@ class SpatialOutputAdapter(nn.Module):
             if self.task_embeddings is not None and task in self.task_embeddings:
                 task_emb = repeat(self.task_embeddings[task], '() () d -> b n d', b=bs, n=info['num_tokens'])
             else:
-                task_emb = torch.zeros((bs, info['num_tokens'], self.dim_tokens), device=device)
+                task_emb = torch.zeros((bs, info['num_tokens'], self.dim_tokens_enc), device=device)
 
             if info['has_2d_posemb']:
                 pos_emb = F.interpolate(self.pos_emb, size=size, mode='bilinear', align_corners=False)
@@ -401,7 +401,8 @@ class SegmenterMaskTransformerAdapter(nn.Module):
 
         self.patch_proj = nn.Linear(embed_dim, embed_dim, bias=False)
         self.classes_proj = nn.Linear(embed_dim, embed_dim, bias=False)
-
+        self.final_layer = nn.Conv2d(self.task_specific_prompt_length ,self.num_classes, 1)
+        
         dpr = [x.item() for x in torch.linspace(0, drop_path_rate, depth)]
         self.blocks = nn.ModuleList([
             Block(dim=embed_dim, num_heads=num_heads, mlp_ratio=mlp_ratio, qkv_bias=qkv_bias, drop=drop_rate,
@@ -425,7 +426,7 @@ class SegmenterMaskTransformerAdapter(nn.Module):
         # Projection of encoder tokens to the patch dimension
         self.proj_dec = nn.Linear(self.in_channels, self.embed_dim)
         self._init_weights(self.proj_dec)
-
+    
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
             trunc_normal_(m.weight, std=.02)
@@ -465,7 +466,7 @@ class SegmenterMaskTransformerAdapter(nn.Module):
         masks = patches @ cls_seg_feat.transpose(1, 2)
         masks = self.mask_norm(masks)
         masks = rearrange(masks, "b (nh nw) c -> b c nh nw", nh=N_H, nw=N_W)
-
+        # masks = self.final_layer(masks)
         # Interpolate to semseg res
         masks = F.interpolate(masks, size=(H, W), mode="bilinear")
 
@@ -569,10 +570,15 @@ class ConvNeXtAdapter(nn.Module):
         #For attention (prompt pool + task specific prompt)
         # self.self_attention1 = CrossMultiHeadAttention(embed_dim= self.dim_tokens_enc , num_heads= 8 )
      
-        self.norm1 = nn.LayerNorm(self.dim_tokens_enc)
+        # self.decoder_block = DecoderBlock( dim=self.dim_tokens_enc,num_heads=8)
+        self.prompt_emb = nn.Linear(self.dim_tokens_enc , self.dim_tokens_enc)
+        self.prompt_down = nn.Linear(self.dim_tokens_enc , self.dim_tokens_enc //4)
+        self.image_down = nn.Linear(self.dim_tokens_enc , self.dim_tokens_enc //4 )
+        self.up_x = nn.Linear(self.dim_tokens_enc // 4 , self.dim_tokens_enc)
+        self.cross_attn = CrossAttention(dim=self.dim_tokens_enc // 4)
+        
         self.norm2 = nn.LayerNorm([160,160])
-        self.cross_attention = CrossAttention(dim= 768 ,attn_drop=0.1)
-
+        
         #blocks
         self.blocks = nn.Sequential(*[
             ConvNeXtBlock(dim=self.class_dim )
@@ -580,6 +586,7 @@ class ConvNeXtAdapter(nn.Module):
         ])
 
         self.final_layer = nn.Conv2d(self.class_dim ,self.num_classes, 1)
+        self.final_prompt = nn.Conv2d(self.task_specific_prompt_length ,self.num_classes, 1)
         self.apply(self._init_weights)
         
     def init(self, dim_tokens_enc: int = 768 
@@ -610,7 +617,19 @@ class ConvNeXtAdapter(nn.Module):
         elif isinstance(m, nn.LayerNorm):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
-
+   
+    def fusion(self ,x) :
+        
+        prompt = x[:,:self.task_specific_prompt_length,:]
+        prompt = self.prompt_emb(prompt)
+        prompt = self.prompt_down(prompt)
+        image = x[:,self.task_specific_prompt_length:,:]
+        image = self.image_down(image)
+        x = self.cross_attn(image, prompt)
+        x = self.up_x(x)
+        
+        return x
+    
     def adapt_tokens(self, encoder_tokens, input_info):
         # Adapt tokens
         
@@ -666,13 +685,21 @@ class ConvNeXtAdapter(nn.Module):
         # x = self.cross_attention(query,key_value) # B 1600+1 786    
         # x = self.norm1(x + query)
         
+        origin_prompts = x[:,:self.task_specific_prompt_length,:]
+        x = x[:,self.task_specific_prompt_length:,:]
+        origin_x = x
+
         x = self.proj_dec(x)
-        x = x[:,1 + self.task_specific_prompt_length: ,:]
-    
+        x = x[:,1+self.task_specific_prompt_length:,:]
+        
         # prompt =x[:,:self.task_specific_prompt_length,:]
         
         # x = rearrange(x, "b (nh nw) c -> b c nh nw", nh=N_H, nw=N_W)
-
+        prompt = origin_x[:,1+self.task_specific_prompt_length:,:] @ origin_prompts.transpose(1,2)
+        prompt = rearrange(prompt ,"b (h w) c -> b c h w" , h = N_H , w = N_W)
+        prompt = self.final_prompt(prompt)
+        prompt = F.interpolate(prompt, size=(H,W) , mode= self.interpolate_mode)
+        
         x = rearrange(x, "b n (p c) -> b (n p) c", n=N_H * N_W, p=self.preds_per_patch, c=self.class_dim) # b 160*160 384
 
         x = rearrange(x, "b (nh nw ph pw) c -> b c (nh ph) (nw pw)",
@@ -683,10 +710,11 @@ class ConvNeXtAdapter(nn.Module):
         x = self.blocks(x)
         x = self.norm2(x)
         x = self.final_layer(x) # B 40 160 160  , prompt = B 40 6144
-
+        
+        
         x = F.interpolate(x, size=(H, W), mode=self.interpolate_mode )
 
-        return x 
+        return x  , prompt
 
 class DPTOutputAdapter(nn.Module):
     """DPT output adapter.

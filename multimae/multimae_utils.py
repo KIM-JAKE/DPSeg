@@ -175,14 +175,6 @@ class Attention(nn.Module):
         qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
         q, k, v = qkv.unbind(0)   # make torchscript happy (cannot use tensor as tuple)
         attn = (q @ k.transpose(-2, -1)) * self.scale
-        #   # 마스크 생성: 프롬프트는 이미지에 영향을 주지 않도록 설정
-          
-        # if self.use_prompt_mask :
-        #     mask = torch.zeros_like(attn)
-        #     mask[:, :,  self.prompt_size : , : self.prompt_size] = float("-inf")
-            
-        #     # 마스크 적용
-        #     attn = attn + mask
             
         # 어텐션 가중치 계산 및 적용        
         attn = attn.softmax(dim=-1)
@@ -250,8 +242,8 @@ class DecoderBlock(nn.Module):
                  drop_path=0., act_layer=nn.GELU, norm_layer=nn.LayerNorm):
         super().__init__()
         self.norm1 = norm_layer(dim)
-        self.self_attn = Attention(dim, num_heads=num_heads, qkv_bias=qkv_bias, attn_drop=attn_drop, proj_drop=drop)
-        self.cross_attn = CrossAttention(dim, num_heads=num_heads, qkv_bias=qkv_bias, attn_drop=attn_drop, proj_drop=drop)
+        self.self_attn = Attention(dim=dim, num_heads=num_heads, qkv_bias=qkv_bias, attn_drop=attn_drop, proj_drop=drop,use_prompt_mask=False,prompt_size=0)
+        self.cross_attn = CrossAttention(dim=dim, num_heads=num_heads, qkv_bias=qkv_bias, attn_drop=attn_drop, proj_drop=drop)
         self.query_norm = norm_layer(dim)
         self.context_norm = norm_layer(dim)
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()

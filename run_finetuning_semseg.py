@@ -177,7 +177,7 @@ def get_args():
                         help='Optimizer Epsilon (default: 1e-8)')
     parser.add_argument('--opt_betas', default=[0.9, 0.999], type=float, nargs='+', metavar='BETA',
                         help='Optimizer Betas (default: None, use opt default)')
-    parser.add_argument('--clip_grad', type=float, default=None, metavar='NORM',
+    parser.add_argument('--clip_grad', type=float, default= None, metavar='NORM',
                         help='Clip gradient norm (default: None, no clipping)')
     parser.add_argument('--momentum', type=float, default=0.9, metavar='M',
                         help='SGD momentum (default: 0.9)')
@@ -549,14 +549,15 @@ def main(args):
 
 
     def custom_loss(preds,target) :
-                
+        real_preds, prompt = preds
         fcl = FocalLoss(ignore_index=255)
-        fc_loss = fcl(preds,target)
+        fc_loss = fcl(real_preds,target)
         mse = torch.nn.MSELoss()
         target = label_to_one_hot_label(target , 40 , 'cuda:0' )
-        mse_loss = mse(preds,target)
+        loss_prompt = mse(prompt,target)
+        mse_loss = mse(real_preds,target)
         
-        loss = fc_loss * 20 + mse_loss
+        loss = (fc_loss * 20) + mse_loss + (120* loss_prompt) 
         
         return loss
     
@@ -811,7 +812,7 @@ def evaluate(model, criterion, data_loader, device, epoch, in_domains, num_class
 
         loss_value = loss.item()
         # If there is void, exclude it from the preds and take second highest class
-        seg_pred_argmax = seg_pred[:, :num_classes].argmax(dim=1)
+        seg_pred_argmax = seg_pred[0][:, :num_classes].argmax(dim=1)
         seg_preds.extend(list(seg_pred_argmax.cpu().numpy()))
         seg_gts.extend(list(seg_gt.cpu().numpy()))
 
