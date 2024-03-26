@@ -85,34 +85,22 @@ from torch.utils.data import default_collate
 class DiceLoss(torch.nn.Module):
     def __init__(self):
         super(DiceLoss, self).__init__()
-        
-    def one_hot_encoding(self, target, num_classes):
-        # target: [batch_size, height, width], 예상되는 값은 0부터 num_classes-1까지의 정수
-        # num_classes: 클래스의 총 개수
-        target = torch.where(target == 255, torch.zeros_like(target), target)
-        batch_size, height, width = target.size()
-        one_hot = torch.zeros(batch_size, num_classes, height, width, device=target.device)
-        one_hot = one_hot.scatter_(1, target.unsqueeze(1), 1)
-        return one_hot
     
     def forward(self, pred, target):
-        target = self.one_hot_encoding(target, 40)
-        
         smooth = 1e-5
-        
+        pred = F.softmax(pred,dim=1)
         # pred와 target이 동일한 크기인지 확인
         if pred.size() != target.size():
             raise ValueError("pred와 target의 크기가 일치하지 않습니다. pred의 크기: {}, target의 크기: {}".format(pred.size(), target.size()))
         
-        iflat = pred.contiguous().view(-1)
-        tflat = target.contiguous().view(-1)
+        pred_flat = pred.view(pred.size(0), -1)
+        target_flat = target.view(target.size(0), -1)
+
+        intersection = (pred_flat * target_flat).sum(1)
         
-        intersection = (iflat * tflat).sum()
+        dice_loss = 1 - ((2. * intersection + smooth) / (pred_flat.sum(1) + target_flat.sum(1) + smooth))
         
-        A_sum = torch.sum(iflat * iflat)
-        B_sum = torch.sum(tflat * tflat)
-        
-        return 1 - ((2. * intersection + smooth) / (A_sum + B_sum + smooth))
+        return dice_loss.mean()
     
 
 def get_args():
@@ -320,7 +308,7 @@ def main(args):
         warnings.filterwarnings("ignore", category=UserWarning)
 
     args.in_domains = args.in_domains.split('-')
-    args.out_domains = ['semseg']
+    args.out_domains = ['semseg','depth']
     args.all_domains = list(set(args.in_domains) | set(args.out_domains))
     if args.use_mask_valid:
         args.all_domains.append('mask_valid')
@@ -548,17 +536,19 @@ def main(args):
             alpha[k] = 0.03
 
 
-    def custom_loss(preds,target) :
-        real_preds, prompt = preds
+    def custom_loss(preds,target, target_depth) :
+        real_preds, prompt_seg, prompt_depth = preds
         fcl = FocalLoss(ignore_index=255)
         fc_loss = fcl(real_preds,target)
         mse = torch.nn.MSELoss()
+        
         target = label_to_one_hot_label(target , 40 , 'cuda:0' )
-        loss_prompt = mse(prompt,target)
-        mse_loss = mse(real_preds,target)
         
-        loss = (fc_loss * 20) + mse_loss + (120* loss_prompt) 
+        mse_loss = mse(real_preds, target)
+        loss_prompt_seg = mse(prompt_seg,target)
+        loss_prompt_depth = mse(prompt_depth , target_depth)
         
+        loss = (fc_loss * 20 + mse_loss) + (100* loss_prompt_seg) + 0 * (loss_prompt_depth)
         return loss
     
     # criterion = FocalLoss(alpha = alpha.to('cuda:0'))
@@ -696,7 +686,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, data_loa
             task: tensor.to(device, non_blocking=True)
             for task, tensor in x.items()
         }
-
+    
         input_dict = {
             task: tensor
             for task, tensor in tasks_dict.items()
@@ -711,8 +701,8 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, data_loa
         # Forward + backward
         with torch.cuda.amp.autocast(enabled=fp16):
             preds = model(input_dict, return_all_layers=return_all_layers)
-            seg_pred, seg_gt = preds['semseg'], tasks_dict['semseg']
-            loss = criterion(seg_pred, seg_gt)
+            seg_pred, seg_gt ,depth_gt = preds['semseg'], tasks_dict['semseg'] , tasks_dict['depth'] 
+            loss = criterion(seg_pred, seg_gt,depth_gt)
 
         loss_value = loss.item()
 
@@ -807,8 +797,8 @@ def evaluate(model, criterion, data_loader, device, epoch, in_domains, num_class
         # Forward + backward
         with torch.cuda.amp.autocast(enabled=fp16):
             preds = model(input_dict, return_all_layers=return_all_layers)
-            seg_pred, seg_gt = preds['semseg'], tasks_dict['semseg']
-            loss = criterion(seg_pred, seg_gt)
+            seg_pred, seg_gt ,depth_gt = preds['semseg'], tasks_dict['semseg'] , tasks_dict['depth']
+            loss = criterion(seg_pred, seg_gt,depth_gt)
 
         loss_value = loss.item()
         # If there is void, exclude it from the preds and take second highest class

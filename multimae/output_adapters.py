@@ -587,6 +587,7 @@ class ConvNeXtAdapter(nn.Module):
 
         self.final_layer = nn.Conv2d(self.class_dim ,self.num_classes, 1)
         self.final_prompt = nn.Conv2d(self.task_specific_prompt_length ,self.num_classes, 1)
+        self.final_prompt_2 = nn.Conv2d(self.task_specific_prompt_length ,1, 1)
         self.apply(self._init_weights)
         
     def init(self, dim_tokens_enc: int = 768 
@@ -643,63 +644,28 @@ class ConvNeXtAdapter(nn.Module):
         N_H, N_W = H // self.patch_size, W // self.patch_size
         
         x = self.adapt_tokens(encoder_tokens, input_info)
-        total_prompt_length = self.prompt_length * self.top_k
-        if self.not_self_attn :
-            
-            if self.num_classes == 1: #depth
-                x =  x[:,2*self.task_specific_prompt_length:,:]
-                k_and_v= x[:,:self.task_specific_prompt_length,:]
         
-            elif self.num_classes == 40 :  #semseg
-                x = x[:,2*self.task_specific_prompt_length:,:]
-                k_and_v = x[:,self.task_specific_prompt_length : 2*self.task_specific_prompt_length,:]
-            
-            query = self.query_projection(x)
-            key = self.key_projection(k_and_v)
-            value = self.value_projection(k_and_v)
-
-            scores = torch.matmul(query, key.transpose(-2, -1)) / (self.embed_dim ** 0.5)
-            attn = F.softmax(scores, dim=-1)
-            context = torch.matmul(attn, value)
-            
-            final_prompts = self.out_projection(context) # B x promt_length(25) x 768
-                
-        # else : #self attention
-            
-        #     # if self.num_classes == 1: #depth
-        #     #     task_original_prompts = x[:,:self.task_specific_prompt_length,:]
-        #     #     x= x[:,2*self.task_specific_prompt_length:,:]
-        #     #     x = torch.cat([x[:,:self.task_specific_prompt_length,:] , x[:,2*self.task_specific_prompt_length:,:]], dim = 1) # B , task_prompt_not_origin + image ,768
-        #     #     x[:,:self.task_specific_prompt_length,:] +=  task_original_prompts
-        #     #     # B , task_prompt_residual + image ,768
-        #     #     x = self.norm1(x)
-            
-        #     if self.num_classes == 40 :  #semseg
-        #         # task_original_prompts = x[:,: self.task_specific_prompt_length,:]
-        #         # x= x[:,total_prompt_length:,:]
-        #         # x = torch.cat([x[:, : self.task_specific_prompt_length,:] ,  x[:,self.task_specific_prompt_length:,:]], dim = 1)
-        #         # x[:,:self.task_specific_prompt_length,:] +=  task_original_prompts
-        
-        # query = x[:,self.task_specific_prompt_length:,:] # B 1600+1 786
-        # key_value = x[:,:self.task_specific_prompt_length,:] # B 300 786
-        # x = self.cross_attention(query,key_value) # B 1600+1 786    
-        # x = self.norm1(x + query)
-        
-        origin_prompts = x[:,:self.task_specific_prompt_length,:]
-        x = x[:,self.task_specific_prompt_length:,:]
+        origin_prompts_1 = x[:,:self.task_specific_prompt_length,:]
+        origin_prompts_2 = x[:,self.task_specific_prompt_length: 2*self.task_specific_prompt_length,:]
+        x = x[:,2*self.task_specific_prompt_length:,:]
         origin_x = x
 
         x = self.proj_dec(x)
-        x = x[:,1+self.task_specific_prompt_length:,:]
+        x = x[:,1+ 2* self.task_specific_prompt_length:,:]
         
-        # prompt =x[:,:self.task_specific_prompt_length,:]
+       # pseudo semseg
+        prompt_seg = origin_x[:,1+ 2*self.task_specific_prompt_length:,:] @ origin_prompts_1.transpose(1,2)
+        prompt_seg = rearrange(prompt_seg ,"b (h w) c -> b c h w" , h = N_H , w = N_W)
+        prompt_seg = self.final_prompt(prompt_seg)
+        prompt_seg = F.interpolate(prompt_seg, size=(H,W) , mode= self.interpolate_mode)
         
-        # x = rearrange(x, "b (nh nw) c -> b c nh nw", nh=N_H, nw=N_W)
-        prompt = origin_x[:,1+self.task_specific_prompt_length:,:] @ origin_prompts.transpose(1,2)
-        prompt = rearrange(prompt ,"b (h w) c -> b c h w" , h = N_H , w = N_W)
-        prompt = self.final_prompt(prompt)
-        prompt = F.interpolate(prompt, size=(H,W) , mode= self.interpolate_mode)
+        # pseudo depth
+        prompt_depth = origin_x[:,1+ 2 * self.task_specific_prompt_length:,:] @ origin_prompts_2.transpose(1,2)
+        prompt_depth = rearrange(prompt_depth ,"b (h w) c -> b c h w" , h = N_H , w = N_W)
+        prompt_depth = self.final_prompt_2(prompt_depth)
+        prompt_depth = F.interpolate(prompt_depth, size=(H,W) , mode= self.interpolate_mode)
         
+        # Real pred
         x = rearrange(x, "b n (p c) -> b (n p) c", n=N_H * N_W, p=self.preds_per_patch, c=self.class_dim) # b 160*160 384
 
         x = rearrange(x, "b (nh nw ph pw) c -> b c (nh ph) (nw pw)",
@@ -714,7 +680,7 @@ class ConvNeXtAdapter(nn.Module):
         
         x = F.interpolate(x, size=(H, W), mode=self.interpolate_mode )
 
-        return x  , prompt
+        return x  , prompt_seg , prompt_depth
 
 class DPTOutputAdapter(nn.Module):
     """DPT output adapter.

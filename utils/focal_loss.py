@@ -194,7 +194,7 @@ class FocalLoss(nn.Module):
         >>> output.backward()
     """
 
-    def __init__(self, alpha = .25 , gamma = 2.0, reduction = 'mean', eps = 1e-8, ignore_index=255):
+    def __init__(self, alpha = .25 , gamma = 4.0, reduction = 'mean', eps = 1e-8, ignore_index=255):
         super().__init__()
         self.alpha = alpha
         self.gamma = gamma

@@ -27,7 +27,7 @@ warmup_epochs: 1
 batch_size: 2
 input_size: 640
 layer_decay: 0.75
-weight_decay: 0.1
+weight_decay: 0.00001
 open_layer : None
 
 # Augmentation
@@ -53,15 +53,15 @@ prompt_deep : True
 top_k : 5
 size : 5
 length : 5 
-task_specific_prompt_length : 225
+task_specific_prompt_length : 200
 not_self_attn : False
 use_prompt_mask : True
 
 # Wandb and logging
 log_wandb: True # Set to True to log to Weights & Biases
-wandb_project: 'missing modality ablation'
+wandb_project: 'Loss Weight Ablation'
 wandb_entity: null # Change if needed
-wandb_run_name: '225-2.5e-5-cl-prompt_self_learning'
+wandb_run_name: '20:1:100'
 log_images_wandb: False
 log_images_freq: 20
-output_dir: '/root/workspace/Results/225-2.5e-5-cl-prompt_self_learning'
+output_dir: '/root/workspace/Results/1:20:150(focal_gamma=4)'
