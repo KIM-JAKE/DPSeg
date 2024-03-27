@@ -107,8 +107,8 @@ class MultiMAE(nn.Module):
         self.task_specific_prompts_1 = nn.Parameter(torch.rand(1, self.task_specific_prompt_length, self.dim_tokens))
         self.task_specific_prompts_1 = nn.init.kaiming_normal_(self.task_specific_prompts_1)
 
-        self.task_specific_prompts_2 = nn.Parameter(torch.rand(1, self.task_specific_prompt_length, self.dim_tokens))
-        self.task_specific_prompts_2 = nn.init.kaiming_normal_(self.task_specific_prompts_1)
+        # self.task_specific_prompts_2 = nn.Parameter(torch.rand(1, self.task_specific_prompt_length, self.dim_tokens))
+        # self.task_specific_prompts_2 = nn.init.kaiming_normal_(self.task_specific_prompts_1)
         
         self.mlp_2 = Mlp(in_features= 768 , hidden_features= 4* 768 , out_features= 768 , drop = 0.0 )
         self.norm_first = nn.LayerNorm(768)
@@ -118,8 +118,7 @@ class MultiMAE(nn.Module):
         # Initialize input and output adapters
         for adapter in input_adapters.values():
             adapter.init(dim_tokens=dim_tokens,
-            prompt_shallow = prompt_shallow,
-            prompt_deep = prompt_deep)
+            )
         self.input_adapters = nn.ModuleDict(input_adapters)
         if output_adapters is not None:
             for adapter in output_adapters.values():
@@ -181,7 +180,7 @@ class MultiMAE(nn.Module):
 
     @torch.jit.ignore
     def no_weight_decay(self):
-        no_wd_set = {'global_tokens', 'layer_prompt_pools' }
+        no_wd_set = {'global_tokens', 'task_specific_prompts_1' }
 
         for task, adapter in self.input_adapters.items():
             if hasattr(adapter, 'no_weight_decay'):
@@ -523,14 +522,13 @@ class MultiViT(MultiMAE):
             W *= self.input_adapters['semseg'].stride_level
         else:
             B, _, H, W = list(x.values())[0].shape  # TODO: Deal with case where not all have same shape
-
         # Encode selected inputs to tokens
         input_task_tokens  = {
             domain: self.input_adapters[domain](tensor)
             for domain, tensor in x.items()
             if domain in self.input_adapters
         }
-
+        
         input_info = self.generate_input_info(input_task_tokens, image_size=(H, W))
         input_tokens = torch.cat([task_tokens for task_tokens in input_task_tokens.values()], dim=1)
         
@@ -586,12 +584,11 @@ class MultiViT(MultiMAE):
         global_tokens = self.global_tokens.expand(input_tokens.size(0), -1, -1)
         expanded_prompts_1 = self.task_specific_prompts_1.expand(input_tokens.size(0), -1, -1)
         # expanded_prompts_1 = self.mlp_1(expanded_prompts_1)
-        expanded_prompts_2 = self.task_specific_prompts_2.expand(input_tokens.size(0), -1, -1)
+        # expanded_prompts_2 = self.task_specific_prompts_2.expand(input_tokens.size(0), -1, -1)
         
         # original_prompts = torch.cat([expanded_prompts_1, expanded_prompts_2], dim=1)
         
-        input_tokens = torch.cat([expanded_prompts_1 , expanded_prompts_2,  global_tokens,  input_tokens ], dim = 1)
-
+        input_tokens = torch.cat([expanded_prompts_1 ,global_tokens,  input_tokens ], dim = 1)
         want_size = input_tokens.shape[1]
         
         # original_tokens = input_tokens
@@ -601,8 +598,8 @@ class MultiViT(MultiMAE):
             for i, layer in enumerate(self.encoder):
                 if 0 <= i < 12  :
                     
-                        prompt = input_tokens[:,: 2* self.task_specific_prompt_length,:]
-                        input_tokens = input_tokens[:,2 * self.task_specific_prompt_length:,:]
+                        prompt = input_tokens[:,: self.task_specific_prompt_length,:]
+                        input_tokens = input_tokens[:,self.task_specific_prompt_length:,:]
                         prompt = self.prompt_dropout(prompt) # B prompt_length 768
                     
                         input_tokens = torch.cat([ prompt , input_tokens ] , dim = 1)
@@ -616,7 +613,7 @@ class MultiViT(MultiMAE):
             # input_tokens = input_tokens[:,self.task_specific_prompt_length:,:] 
             # input_tokens = torch.cat([ prompt , input_tokens] , dim = 1 )  
             
-            encoder_tokens =  torch.cat([expanded_prompts_1 ,expanded_prompts_2 , input_tokens] , dim = 1 )
+            encoder_tokens =  torch.cat([expanded_prompts_1  , input_tokens] , dim = 1 )
             
         # Decode tokens for each task using task-specific output adapters
         preds = {

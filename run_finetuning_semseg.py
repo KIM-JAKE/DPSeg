@@ -56,7 +56,7 @@ DOMAIN_CONF = {
         'channels': 3,
         'stride_level': 1,
         'aug_type': 'image',
-        'input_adapter': partial(PromptPatchedInputAdapter, num_channels=3),
+        'input_adapter': partial(PatchedInputAdapter, num_channels=3),
     },
     'depth': {
         'channels': 1,
@@ -80,27 +80,24 @@ DOMAIN_CONF = {
     },
 }
 
-from torch.utils.data import default_collate
-
 class DiceLoss(torch.nn.Module):
     def __init__(self):
         super(DiceLoss, self).__init__()
     
-    def forward(self, pred, target):
+    def forward(self, pred, targets):
         smooth = 1e-5
         pred = F.softmax(pred,dim=1)
         # pred와 target이 동일한 크기인지 확인
-        if pred.size() != target.size():
-            raise ValueError("pred와 target의 크기가 일치하지 않습니다. pred의 크기: {}, target의 크기: {}".format(pred.size(), target.size()))
+        if pred.size() != targets.size():
+            raise ValueError("pred와 target의 크기가 일치하지 않습니다. pred의 크기: {}, target의 크기: {}".format(pred.size(), targets.size()))
         
-        pred_flat = pred.view(pred.size(0), -1)
-        target_flat = target.view(target.size(0), -1)
+        pred_flat = pred.view(pred.size(0), pred.size(1), -1)  # 예: [B, C, H*W]
+        targets_flat = targets.view(targets.size(0), targets.size(1), -1)  # 예: [B, C, H*W]
 
-        intersection = (pred_flat * target_flat).sum(1)
+        intersection = (pred_flat * targets_flat).sum(-1)
+        dice = (2. * intersection + smooth) / (pred_flat.sum(-1) + targets_flat.sum(-1) + smooth)
         
-        dice_loss = 1 - ((2. * intersection + smooth) / (pred_flat.sum(1) + target_flat.sum(1) + smooth))
-        
-        return dice_loss.mean()
+        return 1 - dice.mean()
     
 
 def get_args():
@@ -308,7 +305,7 @@ def main(args):
         warnings.filterwarnings("ignore", category=UserWarning)
 
     args.in_domains = args.in_domains.split('-')
-    args.out_domains = ['semseg','depth']
+    args.out_domains = ['semseg']
     args.all_domains = list(set(args.in_domains) | set(args.out_domains))
     if args.use_mask_valid:
         args.all_domains.append('mask_valid')
@@ -379,15 +376,15 @@ def main(args):
         args.in_domains.remove('pseudo_semseg')
         args.in_domains.append('semseg')
 
-    # input_adapters = {
-    #     domain: DOMAIN_CONF[domain]['input_adapter'](
-    #         stride_level=DOMAIN_CONF[domain]['stride_level'],
-    #         patch_size_full=args.patch_size,
-    #         image_size=args.input_size,
-    #         learnable_pos_emb=args.learnable_pos_emb,
-    #     )
-    #     for domain in args.in_domains
-    # }
+    input_adapters = {
+        domain: DOMAIN_CONF[domain]['input_adapter'](
+            stride_level=DOMAIN_CONF[domain]['stride_level'],
+            patch_size_full=args.patch_size,
+            image_size=args.input_size,
+            learnable_pos_emb=args.learnable_pos_emb,
+        )
+        for domain in args.in_domains
+    }
 
     # DPT settings are fixed for ViT-B. Modify them if using a different backbone.
     if args.model != 'multivit_base' and args.output_adapter == 'dpt':
@@ -412,15 +409,7 @@ def main(args):
 
     model = create_model(
         args.model,
-        input_adapters ={'rgb': PromptPatchedInputAdapter(num_channels=3,
-        stride_level=1,
-        patch_size_full=args.patch_size,
-        image_size=args.input_size,
-        learnable_pos_emb=args.learnable_pos_emb,
-        prompt_length=args.length,
-        top_k=args.top_k,
-        pool_size=args.size
-        )},
+        input_adapters = input_adapters , 
         output_adapters=output_adapters,
         drop_path_rate=args.drop_path_encoder,
         use_prompt_mask=args.use_prompt_mask,
@@ -536,19 +525,16 @@ def main(args):
             alpha[k] = 0.03
 
 
-    def custom_loss(preds,target, target_depth) :
-        real_preds, prompt_seg, prompt_depth = preds
+    def custom_loss(preds,target) :
+        real_preds, prompt_seg= preds
         fcl = FocalLoss(ignore_index=255)
         fc_loss = fcl(real_preds,target)
         mse = torch.nn.MSELoss()
-        
         target = label_to_one_hot_label(target , 40 , 'cuda:0' )
-        
         mse_loss = mse(real_preds, target)
         loss_prompt_seg = mse(prompt_seg,target)
-        loss_prompt_depth = mse(prompt_depth , target_depth)
         
-        loss = (fc_loss * 20 + mse_loss) + (100* loss_prompt_seg) + 0 * (loss_prompt_depth)
+        loss = (fc_loss * 20 + mse_loss) + (150* loss_prompt_seg) 
         return loss
     
     # criterion = FocalLoss(alpha = alpha.to('cuda:0'))
@@ -692,7 +678,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, data_loa
             for task, tensor in tasks_dict.items()
             if task in in_domains
         }
-
+        
         if 'pseudo_semseg' in tasks_dict and 'semseg' in in_domains:
             psemseg  = tasks_dict['pseudo_semseg']
             psemseg[psemseg > COCO_SEMSEG_NUM_CLASSES - 1] = COCO_SEMSEG_NUM_CLASSES
@@ -701,8 +687,8 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, data_loa
         # Forward + backward
         with torch.cuda.amp.autocast(enabled=fp16):
             preds = model(input_dict, return_all_layers=return_all_layers)
-            seg_pred, seg_gt ,depth_gt = preds['semseg'], tasks_dict['semseg'] , tasks_dict['depth'] 
-            loss = criterion(seg_pred, seg_gt,depth_gt)
+            seg_pred, seg_gt  = preds['semseg'], tasks_dict['semseg'] 
+            loss = criterion(seg_pred, seg_gt)
 
         loss_value = loss.item()
 
@@ -797,8 +783,8 @@ def evaluate(model, criterion, data_loader, device, epoch, in_domains, num_class
         # Forward + backward
         with torch.cuda.amp.autocast(enabled=fp16):
             preds = model(input_dict, return_all_layers=return_all_layers)
-            seg_pred, seg_gt ,depth_gt = preds['semseg'], tasks_dict['semseg'] , tasks_dict['depth']
-            loss = criterion(seg_pred, seg_gt,depth_gt)
+            seg_pred, seg_gt  = preds['semseg'], tasks_dict['semseg'] 
+            loss = criterion(seg_pred, seg_gt)
 
         loss_value = loss.item()
         # If there is void, exclude it from the preds and take second highest class

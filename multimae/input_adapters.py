@@ -44,16 +44,13 @@ class PatchedInputAdapter(nn.Module):
                  num_channels: int,
                  stride_level: int,
                  patch_size_full: Union[int, Tuple[int,int]],
-                 prompt_shallow : bool = False,
-                 prompt_deep : bool = False,
                  dim_tokens: Optional[int] = None,
                  sincos_pos_emb: bool = True,
                  learnable_pos_emb: bool = False,
                  image_size: Union[int, Tuple[int]] = 224):
 
         super().__init__()
-        self.prompt_shallow = prompt_shallow
-        self.prompt_deep = prompt_deep
+
         self.num_channels = num_channels
         self.stride_level = stride_level
         self.patch_size_full = pair(patch_size_full)

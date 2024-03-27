@@ -571,13 +571,10 @@ class ConvNeXtAdapter(nn.Module):
         # self.self_attention1 = CrossMultiHeadAttention(embed_dim= self.dim_tokens_enc , num_heads= 8 )
      
         # self.decoder_block = DecoderBlock( dim=self.dim_tokens_enc,num_heads=8)
-        self.prompt_emb = nn.Linear(self.dim_tokens_enc , self.dim_tokens_enc)
-        self.prompt_down = nn.Linear(self.dim_tokens_enc , self.dim_tokens_enc //4)
-        self.image_down = nn.Linear(self.dim_tokens_enc , self.dim_tokens_enc //4 )
-        self.up_x = nn.Linear(self.dim_tokens_enc // 4 , self.dim_tokens_enc)
-        self.cross_attn = CrossAttention(dim=self.dim_tokens_enc // 4)
+
         
-        self.norm2 = nn.LayerNorm([160,160])
+        self.norm_mask = nn.LayerNorm(self.task_specific_prompt_length)
+        self.norm2 = nn.LayerNorm([140,140])
         
         #blocks
         self.blocks = nn.Sequential(*[
@@ -618,18 +615,6 @@ class ConvNeXtAdapter(nn.Module):
         elif isinstance(m, nn.LayerNorm):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
-   
-    def fusion(self ,x) :
-        
-        prompt = x[:,:self.task_specific_prompt_length,:]
-        prompt = self.prompt_emb(prompt)
-        prompt = self.prompt_down(prompt)
-        image = x[:,self.task_specific_prompt_length:,:]
-        image = self.image_down(image)
-        x = self.cross_attn(image, prompt)
-        x = self.up_x(x)
-        
-        return x
     
     def adapt_tokens(self, encoder_tokens, input_info):
         # Adapt tokens
@@ -646,24 +631,25 @@ class ConvNeXtAdapter(nn.Module):
         x = self.adapt_tokens(encoder_tokens, input_info)
         
         origin_prompts_1 = x[:,:self.task_specific_prompt_length,:]
-        origin_prompts_2 = x[:,self.task_specific_prompt_length: 2*self.task_specific_prompt_length,:]
-        x = x[:,2*self.task_specific_prompt_length:,:]
+        #origin_prompts_2 = x[:,self.task_specific_prompt_length: 2*self.task_specific_prompt_length,:]
+        
+        x = x[:,self.task_specific_prompt_length:,:] #r\original prompt 때고
         origin_x = x
 
         x = self.proj_dec(x)
-        x = x[:,1+ 2* self.task_specific_prompt_length:,:]
+        x = x[:,1+  self.task_specific_prompt_length + N_H * N_W:,:] #RGB만 남겨놓고
         
        # pseudo semseg
-        prompt_seg = origin_x[:,1+ 2*self.task_specific_prompt_length:,:] @ origin_prompts_1.transpose(1,2)
+        prompt_seg = origin_x[:,1+  self.task_specific_prompt_length + N_H * N_W:,:] @ origin_prompts_1.transpose(1,2)
         prompt_seg = rearrange(prompt_seg ,"b (h w) c -> b c h w" , h = N_H , w = N_W)
         prompt_seg = self.final_prompt(prompt_seg)
         prompt_seg = F.interpolate(prompt_seg, size=(H,W) , mode= self.interpolate_mode)
         
         # pseudo depth
-        prompt_depth = origin_x[:,1+ 2 * self.task_specific_prompt_length:,:] @ origin_prompts_2.transpose(1,2)
-        prompt_depth = rearrange(prompt_depth ,"b (h w) c -> b c h w" , h = N_H , w = N_W)
-        prompt_depth = self.final_prompt_2(prompt_depth)
-        prompt_depth = F.interpolate(prompt_depth, size=(H,W) , mode= self.interpolate_mode)
+        # prompt_depth = origin_x[:,1+ 2 * self.task_specific_prompt_length:,:] @ origin_prompts_2.transpose(1,2)
+        # prompt_depth = rearrange(prompt_depth ,"b (h w) c -> b c h w" , h = N_H , w = N_W)
+        # prompt_depth = self.final_prompt_2(prompt_depth)
+        # prompt_depth = F.interpolate(prompt_depth, size=(H,W) , mode= self.interpolate_mode)
         
         # Real pred
         x = rearrange(x, "b n (p c) -> b (n p) c", n=N_H * N_W, p=self.preds_per_patch, c=self.class_dim) # b 160*160 384
@@ -680,7 +666,7 @@ class ConvNeXtAdapter(nn.Module):
         
         x = F.interpolate(x, size=(H, W), mode=self.interpolate_mode )
 
-        return x  , prompt_seg , prompt_depth
+        return x  , prompt_seg 
 
 class DPTOutputAdapter(nn.Module):
     """DPT output adapter.

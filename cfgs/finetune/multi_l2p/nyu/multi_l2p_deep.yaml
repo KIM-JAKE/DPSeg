@@ -4,7 +4,7 @@
 finetune:  "/root/datasets/multimae-b_98_rgb+-depth-semseg_1600e_multivit-afff3f8c (1).pth"
 
 # Input tasks
-in_domains: rgb
+in_domains: rgb-depth
 seed : 0
 
 # Architecture
@@ -25,7 +25,7 @@ warmup_lr: 0.00000025 # = 1e-6
 min_lr: 0.
 warmup_epochs: 1
 batch_size: 2
-input_size: 640
+input_size: 560
 layer_decay: 0.75
 weight_decay: 0.00001
 open_layer : None
@@ -59,9 +59,9 @@ use_prompt_mask : True
 
 # Wandb and logging
 log_wandb: True # Set to True to log to Weights & Biases
-wandb_project: 'Loss Weight Ablation'
+wandb_project: 'RGB-Depth-Multimodal-Test'
 wandb_entity: null # Change if needed
-wandb_run_name: '20:1:100'
+wandb_run_name: '20:1:150'
 log_images_wandb: False
 log_images_freq: 20
-output_dir: '/root/workspace/Results/1:20:150(focal_gamma=4)'
+output_dir: '/root/workspace/Results/20:1:150'
