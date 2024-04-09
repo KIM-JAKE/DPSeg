@@ -23,6 +23,7 @@ import warnings
 from functools import partial
 from pathlib import Path
 from typing import Dict, Iterable
+from utils.data_constants import NYU_MEAN, NYU_STD
 
 import numpy as np
 import torch
@@ -30,7 +31,8 @@ import torch.backends.cudnn as cudnn
 import torch.distributed as dist
 import torch.nn.functional as F
 import yaml
-
+from utils.dataset_regression import build_regression_dataset, nyu_transform
+from einops import rearrange
 import utils
 import utils.data_constants as data_constants
 from multimae import multimae_l2p
@@ -83,6 +85,57 @@ def masked_l1_loss(preds, target, mask_valid=None):
         element_wise_loss = abs(preds - target)
         element_wise_loss[~mask_valid] = 0
         return element_wise_loss.sum() / mask_valid.sum()
+
+
+def masked_berhu_loss(preds, target, mask_valid=None):
+    if mask_valid is None:
+        mask_valid = torch.ones_like(preds).bool()
+    if preds.shape[1] != mask_valid.shape[1]:
+        mask_valid = mask_valid.repeat_interleave(preds.shape[1], 1)
+
+    diff = preds - target
+    diff[~mask_valid] = 0
+    with torch.no_grad():
+        c = max(torch.abs(diff).max() * 0.2, 1e-5)
+
+    l1_loss = torch.abs(diff)
+    l2_loss = (torch.square(diff) + c**2) / 2. / c
+    berhu_loss = l1_loss[torch.abs(diff) < c].sum() + l2_loss[torch.abs(diff) >= c].sum()
+
+    return berhu_loss / mask_valid.sum()
+
+@torch.no_grad()
+def masked_nyu_metrics(preds, target, mask_valid=None):
+    # map to the original scale 
+    preds = preds[0] * NYU_STD + NYU_MEAN
+    target = target * NYU_STD + NYU_MEAN
+
+    if mask_valid is None:
+        mask_valid = torch.ones_like(preds).bool()
+    if preds.shape[1] != mask_valid.shape[1]:
+        mask_valid = mask_valid.repeat_interleave(preds.shape[1], 1)
+
+    n = mask_valid.sum()
+    
+    diff = torch.abs(preds - target)
+    diff[~mask_valid] = 0
+    
+    max_rel = torch.maximum(preds/torch.clamp_min(target, 1e-6), target/torch.clamp_min(preds, 1e-6))
+    max_rel = max_rel[mask_valid]
+
+    log_diff = torch.log(torch.clamp_min(preds, 1e-6)) - torch.log(torch.clamp_min(target, 1e-6))
+    log_diff[~mask_valid] = 0
+
+    metrics = {
+        'rmse': (diff.square().sum() / n).sqrt(),
+        'rel': (diff/torch.clamp_min(target, 1e-6))[mask_valid].mean(),
+        'srel': (diff**2/torch.clamp_min(target, 1e-6))[mask_valid].mean(),
+        'log10': (log_diff.square().sum() / n).sqrt(),
+        'delta_1': (max_rel < 1.25).float().mean(),
+        'delta_2': (max_rel < (1.25**2)).float().mean(),
+        'delta_3': (max_rel < (1.25**3)).float().mean(),
+    }
+    return metrics
 
 def get_args():
     config_parser = parser = argparse.ArgumentParser(description='Training Config', add_help=False)
@@ -174,10 +227,9 @@ def get_args():
     parser.add_argument('--warmup_steps', type=int, default=-1, metavar='N',
                         help='epochs to warmup LR, if scheduler supports')
 
-    # Augmentation parameters
-    parser.add_argument('--aug_name', type=str, default='simple',
-                        choices=['simple'],
-                        help='One of [simple] (default: simple)')
+    parser.add_argument('--aug_name', default='nyu-augs', type=str)
+    parser.add_argument('--color_augs', default=False, action='store_true')
+    parser.add_argument('--no_color_augs', dest='color_augs', default=False, action='store_false')
 
     # Finetuning parameters
     parser.add_argument('--finetune', default='', help='finetune from checkpoint')
@@ -300,19 +352,15 @@ def main(args):
     # Dataset stuff
     additional_targets = {domain: DOMAIN_CONF[domain]['aug_type'] for domain in args.all_domains}
 
-    if args.aug_name == 'simple':
-        train_transform = simple_transform(train=True, additional_targets=additional_targets, input_size=args.input_size)
-        val_transform = simple_transform(train=False, additional_targets=additional_targets, input_size=args.input_size)
+    if args.aug_name == 'nyu-augs':
+        train_transform = nyu_transform(train=True, additional_targets=additional_targets, input_size=args.input_size, color_aug=args.color_augs)
+        val_transform = nyu_transform(train=False, additional_targets=additional_targets, input_size=args.input_size)
     else:
         raise ValueError(f"Invalid aug: {args.aug_name}")
 
-    dataset_train = build_semseg_dataset(args, data_path=args.data_path, transform=train_transform)
-    dataset_val = build_semseg_dataset(args, data_path=args.eval_data_path, transform=val_transform, max_images=args.max_val_images)
-    if args.test_data_path is not None:
-        dataset_test = build_semseg_dataset(args, data_path=args.test_data_path, transform=val_transform)
-    else:
-        dataset_test = None
-
+    dataset_train = build_regression_dataset(args, data_path=args.data_path, transform=train_transform)
+    dataset_val = build_regression_dataset(args, data_path=args.eval_data_path, transform=val_transform, max_images=args.max_val_images)
+    dataset_test = None
 
     sampler_train = torch.utils.data.RandomSampler(dataset_train)
     sampler_val = torch.utils.data.SequentialSampler(dataset_val)
@@ -509,10 +557,24 @@ def main(args):
     wd_schedule_values = utils.cosine_scheduler(
         args.weight_decay, args.weight_decay_end, args.epochs, num_training_steps_per_epoch)
     print("Max WD = %.7f, Min WD = %.7f" % (max(wd_schedule_values), min(wd_schedule_values)))
+    
+    def custom_loss(preds,target) :
+        real_preds, prompt_seg  = preds
+        fcl =  masked_berhu_loss
+        fc_loss = fcl(real_preds,target)
+        mse = torch.nn.MSELoss()
+        
+        mse_loss = mse(real_preds, target)
+        loss_prompt_seg = mse(prompt_seg,target)
+        
+        loss = (fc_loss * 20 + mse_loss) + (1* loss_prompt_seg) 
+        # loss = loss_prompt_seg
+        
+        return loss
+    
+    tasks_loss_fn = custom_loss
 
-    criterion = torch.nn.CrossEntropyLoss(ignore_index=utils.SEG_IGNORE_INDEX)
-
-    print("criterion = %s" % str(criterion))
+    print("criterion = %s" % str(tasks_loss_fn))
 
     # Specifies if transformer encoder should only return last layer or all layers for DPT
     return_all_layers = args.output_adapter in ['dpt']

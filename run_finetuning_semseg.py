@@ -24,6 +24,9 @@ from functools import partial
 from pathlib import Path
 from typing import Dict, Iterable
 
+
+import matplotlib.pyplot as plt
+
 import numpy as np
 import torch
 import torch.backends.cudnn as cudnn
@@ -513,28 +516,20 @@ def main(args):
     wd_schedule_values = utils.cosine_scheduler(
         args.weight_decay, args.weight_decay_end, args.epochs, num_training_steps_per_epoch)
     print("Max WD = %.7f, Min WD = %.7f" % (max(wd_schedule_values), min(wd_schedule_values)))
-    
-    alpha = torch.tensor([0.0018, 0.0023, 0.0040, 0.0041, 0.0067, 0.0064, 0.0085, 0.0079, 0.0079,
-         0.0093, 0.0130, 0.0100, 0.0147, 0.0127, 0.0162, 0.0199, 0.0165, 0.0163,
-         0.0280, 0.0184, 0.0128, 0.0262, 0.0295, 0.0256, 0.0401, 0.0512, 0.0483,
-         0.0431, 0.0472, 0.0477, 0.0608, 0.0437, 0.0677, 0.0621, 0.0780, 0.0726,
-         0.0073, 0.0076, 0.0033, 0.0008])
-        
-    for k in range(len(alpha)) :
-        if alpha[k] < 0.03 :
-            alpha[k] = 0.03
-
 
     def custom_loss(preds,target) :
-        real_preds, prompt_seg= preds
+        real_preds, prompt_seg  = preds
         fcl = FocalLoss(ignore_index=255)
         fc_loss = fcl(real_preds,target)
         mse = torch.nn.MSELoss()
-        target = label_to_one_hot_label(target , 40 , 'cuda:0' )
+        target = label_to_one_hot_label(target ,40  , 'cuda:0' )
         mse_loss = mse(real_preds, target)
         loss_prompt_seg = mse(prompt_seg,target)
         
         loss = (fc_loss * 20 + mse_loss) + (150* loss_prompt_seg) 
+    
+        # loss = loss_prompt_seg
+        
         return loss
     
     # criterion = FocalLoss(alpha = alpha.to('cuda:0'))
@@ -791,7 +786,8 @@ def evaluate(model, criterion, data_loader, device, epoch, in_domains, num_class
         seg_pred_argmax = seg_pred[0][:, :num_classes].argmax(dim=1)
         seg_preds.extend(list(seg_pred_argmax.cpu().numpy()))
         seg_gts.extend(list(seg_gt.cpu().numpy()))
-
+        # attn_heat_map = seg_pred[2].mean(dim=1)
+        # save_attention_maps(attn_heat_map)
         if log_images:
             rgb_gts.extend(tasks_dict['rgb'].cpu().unbind(0))
             seg_preds_with_void.extend(list(seg_pred.argmax(dim=1).cpu().numpy()))
@@ -803,7 +799,7 @@ def evaluate(model, criterion, data_loader, device, epoch, in_domains, num_class
     # Do before metrics so that void is not replaced
     if log_images and utils.is_main_process():
         prefix = 'val/img' if mode == 'val' else 'test/img'
-        log_semseg_wandb(rgb_gts, seg_preds_with_void, seg_gts, depth_gts=depth_gts, dataset_name=dataset_name, prefix=prefix)
+        log_semseg_wandb(rgb_gts, seg_preds_with_void, seg_gts, depth_gts=depth_gts,dataset_name=dataset_name, prefix=prefix)
 
     scores = compute_metrics_distributed(seg_preds, seg_gts, size=len(data_loader.dataset), num_classes=num_classes,
                                          device=device, ignore_index=utils.SEG_IGNORE_INDEX)
@@ -819,7 +815,54 @@ def evaluate(model, criterion, data_loader, device, epoch, in_domains, num_class
 
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
 
+from datetime import datetime
 
+def upsample_attention(attn_map, patch_size=16, img_dim=576):
+    if isinstance(attn_map, torch.Tensor):
+        attn_map = attn_map.cpu().numpy()
+    upsampled_attn = np.zeros((img_dim, img_dim))
+    patch_dim = img_dim // patch_size
+    for i in range(patch_dim):
+        for j in range(patch_dim):
+            x_start = i * patch_size
+            y_start = j * patch_size
+            upsampled_attn[x_start:x_start+patch_size, y_start:y_start+patch_size] = attn_map[i, j]
+    return upsampled_attn
+
+def save_average_attention_maps(attn_weights, output_dir="/root/workspace/attn_map_avg_hot", patch_size=16, img_dim=576):
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+    
+    if isinstance(attn_weights, torch.Tensor):
+        attn_weights = attn_weights.cpu().numpy()
+    
+    attn_weights_mean = attn_weights.mean(axis=1)  # 헤드에 대한 평균
+    attn_weights_mean = attn_weights_mean.mean(axis=1)  # 프롬프트에 대한 평균
+
+    for batch_idx in range(attn_weights_mean.shape[0]):
+        attn_map = attn_weights_mean[batch_idx].reshape(36, 36)
+        upsampled_attn_map = upsample_attention(attn_map, patch_size, img_dim)
+        
+        # 파일 이름에 현재 시간의 타임스탬프를 포함시킵니다.
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S%f")
+        filename = f"{output_dir}/attention_map_{timestamp}.png"
+        plt.imsave(filename, upsampled_attn_map, cmap='hot')
+
+def save_attention_maps(attn_weights, output_dir="/root/workspace/attn_map_per_prompt", patch_size=16, img_dim=576):
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+    
+    timestamp = time.strftime("%Y%m%d-%H%M%S")  # 현재 시간을 문자열로 획득
+    batch_size, prompt_size, _ = attn_weights.shape[:3]
+    
+    for batch_idx in range(batch_size):
+        for prompt_idx in range(prompt_size):
+            attn_map = attn_weights[batch_idx, prompt_idx, :].reshape(36, 36)
+            upsampled_attn_map = upsample_attention(attn_map, patch_size, img_dim)
+            
+            filename = f"{output_dir}/{timestamp}_prompt_{prompt_idx}.png"
+            plt.imsave(filename, upsampled_attn_map, cmap='hot')
+            
 def compute_metrics_distributed(seg_preds, seg_gts, size, num_classes, device, ignore_index=utils.SEG_IGNORE_INDEX, dist_on='cpu'):
 
     # Replace void by ignore in gt (void is never counted in mIoU)

@@ -27,7 +27,7 @@ from torch.distributions.dirichlet import Dirichlet
 from torch.nn import Dropout
 from utils.registry import register_model
 
-from .multimae_utils import Block, trunc_normal_ , Mlp , CrossAttention
+from .multimae_utils import Block, trunc_normal_ , Mlp , CrossAttention , Attention
 
 __all__ = [
     'pretrain_multimae_base',
@@ -78,7 +78,7 @@ class MultiMAE(nn.Module):
                  drop_rate: float = 0.0,
                  attn_drop_rate: float = 0.0,
                  drop_path_rate: float = 0.0,
-                 prompt_dropout_rate : float = 0. ,
+                 prompt_dropout_rate : float = 0.0 ,
                  norm_layer: nn.Module = partial(nn.LayerNorm, eps=1e-6),**kwargs):
         super().__init__()
 
@@ -109,10 +109,15 @@ class MultiMAE(nn.Module):
 
         # self.task_specific_prompts_2 = nn.Parameter(torch.rand(1, self.task_specific_prompt_length, self.dim_tokens))
         # self.task_specific_prompts_2 = nn.init.kaiming_normal_(self.task_specific_prompts_1)
-        
+        self.ca = CrossAttention(dim=768)
+        self.lin = nn.Linear(768,768)
+        self.ca2 = CrossAttention(dim=768)
+        self.lin2 = nn.Linear(768,768)
         self.mlp_2 = Mlp(in_features= 768 , hidden_features= 4* 768 , out_features= 768 , drop = 0.0 )
         self.norm_first = nn.LayerNorm(768)
         self.norm = nn.LayerNorm(768)
+        self.norm2 = nn.LayerNorm(768)
+        self.norm3 = nn.LayerNorm(768)
         # For fusion
     
         # Initialize input and output adapters
@@ -474,20 +479,18 @@ class MFA(nn.Module):
         super(MFA, self).__init__()
         self.dim_tokens_enc = 768
 
-        self.prompt_emb = nn.Linear(self.dim_tokens_enc, self.dim_tokens_enc)
         self.prompt_down = nn.Linear(self.dim_tokens_enc, self.dim_tokens_enc // 4)
         self.image_down = nn.Linear(self.dim_tokens_enc, self.dim_tokens_enc // 4)
         self.up_x = nn.Linear(self.dim_tokens_enc // 4, self.dim_tokens_enc)
         self.cross_attn = CrossAttention(dim=self.dim_tokens_enc // 4)
     
-    def forward(self, x, task_specific_prompt_length = 125):  # forward 메소드 정의
+    def forward(self, x, task_specific_prompt_length = 200):  # forward 메소드 정의
         self.task_specific_prompt_length = task_specific_prompt_length
         prompt = x[:, :self.task_specific_prompt_length, :]
-        prompt = self.prompt_emb(prompt)
         prompt = self.prompt_down(prompt)
         image = x[:, self.task_specific_prompt_length:, :]
         image = self.image_down(image)
-        x = self.cross_attn(image, prompt)
+        x = self.cross_attn(prompt, image)
         x = self.up_x(x)
         return x
     
@@ -579,41 +582,37 @@ class MultiViT(MultiMAE):
         
         input_tokens, input_info  = self.process_input(x)
         
-        prompt_input_size = self.top_k * self.prompt_length 
-        
         global_tokens = self.global_tokens.expand(input_tokens.size(0), -1, -1)
         expanded_prompts_1 = self.task_specific_prompts_1.expand(input_tokens.size(0), -1, -1)
-        # expanded_prompts_1 = self.mlp_1(expanded_prompts_1)
+               
         # expanded_prompts_2 = self.task_specific_prompts_2.expand(input_tokens.size(0), -1, -1)
         
         # original_prompts = torch.cat([expanded_prompts_1, expanded_prompts_2], dim=1)
-        
+
         input_tokens = torch.cat([expanded_prompts_1 ,global_tokens,  input_tokens ], dim = 1)
         want_size = input_tokens.shape[1]
-        
         # original_tokens = input_tokens
         
         if self.prompt_deep:
             
             for i, layer in enumerate(self.encoder):
                 if 0 <= i < 12  :
-                    
                         prompt = input_tokens[:,: self.task_specific_prompt_length,:]
                         input_tokens = input_tokens[:,self.task_specific_prompt_length:,:]
                         prompt = self.prompt_dropout(prompt) # B prompt_length 768
-                    
                         input_tokens = torch.cat([ prompt , input_tokens ] , dim = 1)
-                            
-                        input_tokens = layer(input_tokens)  
+                        input_tokens  = layer(input_tokens)  
+                        if i == 5 :
+                            save_prompt = prompt
 
             # prompt = input_tokens[:,:self.task_specific_prompt_length,:]
             
-            input_tokens = self.norm(self.mlp_2(self.norm_first(input_tokens)) + input_tokens)
+            # input_tokens = self.norm(self.mlp_2(self.norm_first(input_tokens)) + input_tokens)
 
             # input_tokens = input_tokens[:,self.task_specific_prompt_length:,:] 
             # input_tokens = torch.cat([ prompt , input_tokens] , dim = 1 )  
             
-            encoder_tokens =  torch.cat([expanded_prompts_1  , input_tokens] , dim = 1 )
+            encoder_tokens =  torch.cat([expanded_prompts_1, input_tokens] , dim = 1 ) 
             
         # Decode tokens for each task using task-specific output adapters
         preds = {
@@ -624,8 +623,7 @@ class MultiViT(MultiMAE):
             for domain in self.output_adapters
         }
 
-        return preds
-
+        return preds 
 
 @register_model
 def multivit_base(

@@ -516,7 +516,66 @@ class CrossMultiHeadAttention(nn.Module):
         output = self.layer_norm(output + query_seq)
         
         return output
+  
+  
+class MFA(nn.Module):  
+    def __init__(self):
+        super(MFA, self).__init__()
+        self.dim_tokens_enc = 768
+        self.num_classes = 40
+        self.prompt_emb = nn.Linear(self.dim_tokens_enc, self.dim_tokens_enc)
+        self.prompt_down = nn.Linear(self.dim_tokens_enc, self.dim_tokens_enc // 4)
+        self.image_down = nn.Linear(self.dim_tokens_enc, self.dim_tokens_enc // 4)
+        self.cross_attn = CrossAttention(dim=self.dim_tokens_enc // 4)
+        self.conv = nn.Conv2d(self.dim_tokens_enc//4 ,self.num_classes, 1)
+        self.norm = nn.LayerNorm(self.dim_tokens_enc//4)
+        
+    def forward(self, x, task_specific_prompt_length = 200):  # forward 메소드 정의
+        self.task_specific_prompt_length = task_specific_prompt_length
+        prompt = x[:, :self.task_specific_prompt_length, :]
+        prompt = self.prompt_emb(prompt)
+        prompt = self.prompt_down(prompt)
+        image = x[:, self.task_specific_prompt_length:, :]
+        image = self.image_down(image)
+        x = self.cross_attn(image, prompt) # B image dim
+        x = self.norm(x)
+        x = rearrange(x,"b (h w) c -> b c h w" , h = 36, w = 36)
+        x = self.conv(x)
+        return x
+ 
+class SELayer(nn.Module):
+    def __init__(self, channel=40, reduction=16):
+        super(SELayer, self).__init__()
+        # Squeeze 단계: 전역 평균 풀링을 사용하여 채널별 평균을 계산
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        # Excitation 단계: 두 개의 완전 연결(FC) 레이어를 사용하여 채널별 가중치를 학습
+        self.fc = nn.Sequential(
+            nn.Linear(channel, channel // reduction, bias=False),
+            nn.ReLU(inplace=True),
+            nn.Linear(channel // reduction, channel, bias=False),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x):
+        b, c, _, _ = x.size()
+        # Squeeze
+        y = self.avg_pool(x).view(b, c)
+        # Excitation
+        y = self.fc(y).view(b, c, 1, 1)
+        # 채널별 중요도 가중치를 원본 입력 x에 곱함
+        return y.expand_as(x)
     
+class LearnableMasking(nn.Module):
+    def __init__(self, channels=40, height=36, width=36):
+        super(LearnableMasking, self).__init__()
+        self.mask = nn.Parameter(torch.randn(channels, height, width))
+    
+    def forward(self, x):
+        # 시그모이드 함수를 적용하여 마스크 값을 [0, 1] 범위로 조정
+        mask = torch.sigmoid(self.mask)
+        # 마스크 적용
+        return x * mask
+             
 class ConvNeXtAdapter(nn.Module):
     """Output adapter with ConvNext blocks for semantic segmentation
 
@@ -565,7 +624,7 @@ class ConvNeXtAdapter(nn.Module):
         self.num_classes = int(num_classes)
         self.interpolate_mode = interpolate_mode
         self.not_self_attn = not_self_attn
-        self.scale = self.dim_tokens_enc ** -0.5
+        self.scale = self.dim_tokens_enc ** -1
         
         #For attention (prompt pool + task specific prompt)
         # self.self_attention1 = CrossMultiHeadAttention(embed_dim= self.dim_tokens_enc , num_heads= 8 )
@@ -574,17 +633,20 @@ class ConvNeXtAdapter(nn.Module):
 
         
         self.norm_mask = nn.LayerNorm(self.task_specific_prompt_length)
-        self.norm2 = nn.LayerNorm([140,140])
-        
+        self.norm = nn.LayerNorm(768)
+        self.norm3 = nn.LayerNorm(768)
+        self.norm2 = nn.LayerNorm([144,144])
+        self.batch_norm = nn.BatchNorm2d(40)
         #blocks
         self.blocks = nn.Sequential(*[
             ConvNeXtBlock(dim=self.class_dim )
             for _ in range(depth)
         ])
-
+        self.ca_1 = CrossAttention(dim=768)
+        self.ca_2 = CrossAttention(dim=768)
         self.final_layer = nn.Conv2d(self.class_dim ,self.num_classes, 1)
         self.final_prompt = nn.Conv2d(self.task_specific_prompt_length ,self.num_classes, 1)
-        self.final_prompt_2 = nn.Conv2d(self.task_specific_prompt_length ,1, 1)
+        # self.final_prompt_2 = nn.Conv2d(self.task_specific_prompt_length ,1, 1)
         self.apply(self._init_weights)
         
     def init(self, dim_tokens_enc: int = 768 
@@ -620,37 +682,36 @@ class ConvNeXtAdapter(nn.Module):
         # Adapt tokens
         
         x = encoder_tokens
-        
         return x 
     
+
     def forward(self, encoder_tokens: torch.Tensor, input_info: Dict):
 
         H, W = input_info['image_size']
         N_H, N_W = H // self.patch_size, W // self.patch_size
         
         x = self.adapt_tokens(encoder_tokens, input_info)
-        
         origin_prompts_1 = x[:,:self.task_specific_prompt_length,:]
         #origin_prompts_2 = x[:,self.task_specific_prompt_length: 2*self.task_specific_prompt_length,:]
         
-        x = x[:,self.task_specific_prompt_length:,:] #r\original prompt 때고
+        x = x[:,self.task_specific_prompt_length:,:] #original prompt 때고
         origin_x = x
-
         x = self.proj_dec(x)
-        x = x[:,1+  self.task_specific_prompt_length + N_H * N_W:,:] #RGB만 남겨놓고
-        
-       # pseudo semseg
-        prompt_seg = origin_x[:,1+  self.task_specific_prompt_length + N_H * N_W:,:] @ origin_prompts_1.transpose(1,2)
+    
+        x = x[:,1+  self.task_specific_prompt_length + N_H * N_W :,:] #RGB만 남겨놓고
+       
+    #   # pseudo semseg
+        # prompt_seg =(origin_x[:,1+  self.task_specific_prompt_length + N_H * N_W  :,:] @ origin_prompts_1.transpose(1,2) )
+        # origin_prompts_1 = self.sa(origin_prompts_1)
+        # origin_prompts_1 = self.mlp(origin_prompts_1)
+        p_to_im =  (self.ca_1(origin_x[:,1+  self.task_specific_prompt_length + N_H * N_W  :,:] ,origin_prompts_1)) # B image 768
+        im_to_p = (origin_prompts_1 + self.ca_2(origin_prompts_1 , p_to_im)) # B prompt 768
+        prompt_seg = (p_to_im @ im_to_p.transpose(1,2)) 
         prompt_seg = rearrange(prompt_seg ,"b (h w) c -> b c h w" , h = N_H , w = N_W)
         prompt_seg = self.final_prompt(prompt_seg)
+        prompt_seg = self.batch_norm(prompt_seg)
         prompt_seg = F.interpolate(prompt_seg, size=(H,W) , mode= self.interpolate_mode)
-        
-        # pseudo depth
-        # prompt_depth = origin_x[:,1+ 2 * self.task_specific_prompt_length:,:] @ origin_prompts_2.transpose(1,2)
-        # prompt_depth = rearrange(prompt_depth ,"b (h w) c -> b c h w" , h = N_H , w = N_W)
-        # prompt_depth = self.final_prompt_2(prompt_depth)
-        # prompt_depth = F.interpolate(prompt_depth, size=(H,W) , mode= self.interpolate_mode)
-        
+ 
         # Real pred
         x = rearrange(x, "b n (p c) -> b (n p) c", n=N_H * N_W, p=self.preds_per_patch, c=self.class_dim) # b 160*160 384
 
@@ -660,12 +721,9 @@ class ConvNeXtAdapter(nn.Module):
                         pw=int(self.preds_per_patch ** 0.5))
         
         x = self.blocks(x)
-        x = self.norm2(x)
+        #x = self.norm2(x)
         x = self.final_layer(x) # B 40 160 160  , prompt = B 40 6144
-        
-        
         x = F.interpolate(x, size=(H, W), mode=self.interpolate_mode )
-
         return x  , prompt_seg 
 
 class DPTOutputAdapter(nn.Module):

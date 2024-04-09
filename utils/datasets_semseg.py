@@ -81,8 +81,9 @@ def simple_transform(train: bool,
             # A.Lambda(image=apply_random_scale_crop) ,
             A.HorizontalFlip(p=0.5),
             A.LongestMaxSize(max_size=input_size, p=1),
-            A.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.2, hue=0.1, p=0.5),  # Color jittering from MoCo-v3 / DINO
-            A.RandomScale(scale_limit=(0.1 - 1, 2.0 - 1), p=1),  # This is LSJ (0.1, 2.0)
+            A.ColorJitter(brightness=[0.4,1.4], contrast=0.4, saturation=[0.4,1.4], hue=[0.2,0.4], p=0.5),  # Color jittering from MoCo-v3 / DINO
+            A.RandomScale(scale_limit=(0.1 - 1, 2.0 - 1), p=1), 
+            A.FancyPCA(alpha=0.1, always_apply=False, p=0.5) , # This is LSJ (0.1, 2.0)
             A.PadIfNeeded(min_height=input_size, min_width=input_size,
                           position=A.augmentations.PadIfNeeded.PositionType.TOP_LEFT,
                           border_mode=cv2.BORDER_CONSTANT,
@@ -94,11 +95,8 @@ def simple_transform(train: bool,
 
     else:
         transform = A.Compose([
-            A.LongestMaxSize(max_size=input_size, p=1),
-            A.PadIfNeeded(min_height=input_size, min_width=input_size,
-                          position=A.augmentations.PadIfNeeded.PositionType.TOP_LEFT,
-                          border_mode=cv2.BORDER_CONSTANT,
-                          value=pad_value, mask_value=pad_mask_value),
+            A.SmallestMaxSize(max_size=input_size, p=1.0),  # 짧은 축이 256이 되도록 사이즈 조절
+            A.CenterCrop(height=input_size, width=input_size, p=1.0),
             A.Normalize(mean=IMAGENET_DEFAULT_MEAN, std=IMAGENET_DEFAULT_STD),
             ToTensorV2(),
         ], additional_targets=additional_targets)

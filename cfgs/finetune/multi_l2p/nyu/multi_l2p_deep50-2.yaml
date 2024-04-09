@@ -4,14 +4,14 @@
 finetune:  "/root/datasets/multimae-b_98_rgb+-depth-semseg_1600e_multivit-afff3f8c (1).pth"
 
 # Input tasks
-in_domains: rgb
+in_domains: rgb-depth
 seed : 0
 
 # Architecture
 model: multivit_base
 patch_size: 16
 num_global_tokens: 1
-drop_path_encoder: 0.01
+drop_path_encoder: 0.1
 output_adapter: convnext
 decoder_dim: 6144
 decoder_preds_per_patch: 16
@@ -20,12 +20,12 @@ decoder_depth: 4
 # Train
 epochs: 300
 opt: adamw
-lr: 0.000025 # = 1.5e-5
-warmup_lr: 0.00000025 # = 1e-6
+lr: 0.00001 # = 1.5e-5
+warmup_lr: 0.0000001 # = 1e-6
 min_lr: 0.
 warmup_epochs: 1
 batch_size: 2
-input_size: 640
+input_size: 576
 layer_decay: 0.75
 weight_decay: 0.00001
 open_layer : None
@@ -34,10 +34,10 @@ open_layer : None
 aug_name: simple
 
 # Data info
-data_path: "/root/datasets/NYUv2_Dataset/NYUv2/NYUv2/train"
-eval_data_path: "/root/datasets/NYUv2_Dataset/NYUv2/NYUv2/test" # Change me
-num_classes: 40
-dataset_name: nyu
+data_path: "/root/datasets/srgbd/train"
+eval_data_path: "/root/datasets/srgbd/test" # Change me
+num_classes: 37
+dataset_name: sun-rgbd
 dist_eval: True
 seg_reduce_zero_label: True
 eval_freq: 10
@@ -53,15 +53,15 @@ prompt_deep : True
 top_k : 5
 size : 5
 length : 5 
-task_specific_prompt_length : 225
+task_specific_prompt_length : 128
 not_self_attn : False
 use_prompt_mask : True
 
 # Wandb and logging
 log_wandb: True # Set to True to log to Weights & Biases
-wandb_project: 'DPE Ablation'
+wandb_project: 'SUN-RGB-D-OURS'
 wandb_entity: null # Change if needed
-wandb_run_name: 'dpe=0.01'
+wandb_run_name: '20:1:100-prompt=128-dropout=0.5-re'
 log_images_wandb: False
 log_images_freq: 20
-output_dir: '/root/workspace/Results/dpe=0.01'
+output_dir: '/root/workspace/Results/20:1:100-prompt=128-dropout=0.5-re'
