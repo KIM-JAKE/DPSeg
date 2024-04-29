@@ -406,7 +406,7 @@ def main(args):
     }
 
     output_adapters = {
-        'semseg': adapters_dict['convnext'](
+        'semseg': adapters_dict['segmenter'](
             num_classes=args.num_classes_with_void,
             embed_dim=args.decoder_dim, patch_size=args.patch_size, 
             prompt_deep = args.prompt_deep , prompt_shallow = args.prompt_shallow,
@@ -537,8 +537,8 @@ def main(args):
         return loss
     
     # criterion = FocalLoss(alpha = alpha.to('cuda:0'))
-    criterion = custom_loss
-    # criterion = torch.nn.CrossEntropyLoss(ignore_index=255)
+    # criterion = custom_loss
+    criterion = torch.nn.CrossEntropyLoss(ignore_index=255)
     print("criterion = %s" % str(criterion))
 
     # Specifies if transformer encoder should only return last layer or all layers for DPT
@@ -808,7 +808,7 @@ def evaluate(model, criterion, data_loader, device, epoch, in_domains, num_class
         
         loss_value = loss.item()
         # If there is void, exclude it from the preds and take second highest class
-        seg_pred_argmax = seg_pred[0][:, :num_classes].argmax(dim=1)
+        seg_pred_argmax = seg_pred[:, :num_classes].argmax(dim=1)
         seg_preds.extend(list(seg_pred_argmax.cpu().numpy()))
         seg_gts.extend(list(seg_gt.cpu().numpy()))
         # attn_heat_map = seg_pred[2].mean(dim=1)

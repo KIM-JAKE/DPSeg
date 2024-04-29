@@ -14,6 +14,8 @@
 # https://github.com/facebookresearch/mae
 # https://github.com/open-mmlab/mmsegmentation
 # --------------------------------------------------------
+
+
 import argparse
 import datetime
 import json
@@ -51,7 +53,7 @@ from utils import NativeScalerWithGradNormCount as NativeScaler
 from utils import create_model
 from utils.data_constants import COCO_SEMSEG_NUM_CLASSES
 from utils.datasets_semseg import build_semseg_dataset, simple_transform
-# from utils.dist import collect_results_cpu
+from utils.dist import collect_results_cpu
 from utils.log_images import log_semseg_wandb
 from utils.optim_factory import LayerDecayValueAssigner, create_optimizer
 from utils.pos_embed import interpolate_pos_embed_multimae
@@ -59,6 +61,19 @@ from utils.semseg_metrics import mean_iou
 from utils.copy_paste import CopyPaste
 from utils.lovasz_loss import lovasz_softmax
 
+class SubsetDataset(torch.utils.data.Dataset):
+    """데이터셋의 부분집합만을 반환하는 클래스"""
+    def __init__(self, dataset, start_idx, end_idx):
+        self.dataset = dataset
+        self.start_idx = start_idx
+        self.end_idx = end_idx
+
+    def __len__(self):
+        return self.end_idx - self.start_idx
+
+    def __getitem__(self, idx):
+        return self.dataset[self.start_idx + idx]
+    
 DOMAIN_CONF = {
     'rgb': {
         'channels': 3,
@@ -276,11 +291,13 @@ def get_args():
     parser.add_argument('--show_user_warnings', default=False, action='store_true')
 
     # Distributed training parameters
-    parser.add_argument('--world_size', default=1, type=int,
+    parser.add_argument('--world_size', default=2, type=int,
                         help='number of distributed processes')
     parser.add_argument('--local_rank', default=-1, type=int)
     parser.add_argument('--dist_on_itp', action='store_true')
-    parser.add_argument('--dist_url', default='env://', help='url used to set up distributed training')
+    parser.add_argument('--dist_url', default='env://115.145.20.201:3014', help='url used to set up distributed training')
+    
+    
     parser.add_argument('--freeze', default=['encoder'], nargs='*', type=list, help='freeze part in backbone model')
     
 
@@ -299,6 +316,7 @@ def get_args():
 
 
 def main(args):
+    utils.init_distributed_mode(args)
     device = torch.device(args.device)
 
     # fix the seed for reproducibility
@@ -337,17 +355,37 @@ def main(args):
     else:
         dataset_test = None
 
+    if True:  # args.distributed:
+        num_tasks = utils.get_world_size()
+        global_rank = utils.get_rank()
+        sampler_train = torch.utils.data.DistributedSampler(
+            dataset_train, num_replicas=num_tasks, rank=global_rank, shuffle=True, drop_last=True,
+        )
+        print("Sampler_train = %s" % str(sampler_train))
+        if args.dist_eval:
+            if len(dataset_val) % num_tasks != 0:
+                print('Warning: Enabling distributed evaluation with an eval dataset not divisible by process number. '
+                      'This will slightly alter validation results as extra duplicate entries are added to achieve '
+                      'equal num of samples per-process.')
+            sampler_val = torch.utils.data.DistributedSampler(
+                dataset_val, num_replicas=num_tasks, rank=global_rank, shuffle=False)
+            if dataset_test is not None:
+                sampler_test = torch.utils.data.DistributedSampler(
+                    dataset_test, num_replicas=num_tasks, rank=global_rank, shuffle=False)
+        else:
+            sampler_val = torch.utils.data.SequentialSampler(dataset_val)
+            if dataset_test is not None:
+                sampler_test = torch.utils.data.SequentialSampler(dataset_test)
+    else:
+        sampler_train = torch.utils.data.RandomSampler(dataset_train)
+        sampler_val = torch.utils.data.SequentialSampler(dataset_val)
+        if dataset_test is not None:
+            sampler_test = torch.utils.data.SequentialSampler(dataset_test)
 
-    sampler_train = torch.utils.data.RandomSampler(dataset_train)
-    sampler_val = torch.utils.data.SequentialSampler(dataset_val)
-    
-    if dataset_test is not None:
-        sampler_test = torch.utils.data.SequentialSampler(dataset_test)
-
-    if args.log_wandb:
+    if global_rank == 0 and args.log_wandb:
         log_writer = utils.WandbLogger(args)
     else:
-        log_writer = None       
+        log_writer = None
 
     data_loader_train = torch.utils.data.DataLoader(
         dataset_train, sampler=sampler_train,
@@ -505,6 +543,9 @@ def main(args):
     skip_weight_decay_list = model.no_weight_decay()
     print("Skip weight decay list: ", skip_weight_decay_list)
 
+    if args.distributed:
+        model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], find_unused_parameters=args.find_unused_params)
+        model_without_ddp = model.module
 
     optimizer = create_optimizer(args, model_without_ddp, skip_list=skip_weight_decay_list,
             get_num_layer=assigner.get_layer_id if assigner is not None else None,
@@ -527,7 +568,7 @@ def main(args):
         fcl = FocalLoss(ignore_index=255)
         fc_loss = fcl(real_preds,target)
         mse = torch.nn.MSELoss()
-        target = label_to_one_hot_label(target ,25 , 'cuda:0' )
+        target = label_to_one_hot_label(target ,25 , target.device)
         mse_loss = mse(real_preds, target)
         loss_prompt_seg = mse(prompt_seg,target)
         
@@ -571,6 +612,8 @@ def main(args):
     start_time = time.time()
     max_miou = 0.0
     for epoch in range(args.start_epoch, args.epochs):
+        if args.distributed:
+            data_loader_train.sampler.set_epoch(epoch)
         if log_writer is not None:
             log_writer.set_step(epoch * num_training_steps_per_epoch)
         train_stats = train_one_epoch(
@@ -895,14 +938,24 @@ def compute_metrics_distributed(seg_preds, seg_gts, size, num_classes, device, i
         # Void label is equal to num_classes
         seg_gt[seg_gt == num_classes] = ignore_index
 
-    all_seg_preds = seg_preds
-    all_seg_gts = seg_gts
+   # Collect metrics from all devices
+    if dist_on == 'cpu':
+        all_seg_preds = collect_results_cpu(seg_preds, size, tmpdir=None)
+        all_seg_gts = collect_results_cpu(seg_gts, size, tmpdir=None)
+    elif dist_on == 'gpu':
+        world_size = utils.get_world_size()
+        all_seg_preds = [None for _ in range(world_size)]
+        all_seg_gts = [None for _ in range(world_size)]
+        # gather all result part
+        dist.all_gather_object(all_seg_preds, seg_preds)
+        dist.all_gather_object(all_seg_gts, seg_gts)
 
     ret_metrics_mean = torch.zeros(3, dtype=float, device=device)
 
     if utils.is_main_process():
-        ordered_seg_preds = all_seg_preds
-        ordered_seg_gts = all_seg_gts
+        ordered_seg_preds = [result for result_part in all_seg_preds for result in result_part]
+        ordered_seg_gts = [result for result_part in all_seg_gts for result in result_part]
+
 
         ret_metrics = mean_iou(results=ordered_seg_preds,
                                gt_seg_maps=ordered_seg_gts,
@@ -920,7 +973,7 @@ def compute_metrics_distributed(seg_preds, seg_gts, size, num_classes, device, i
         # cat_iou = ret_metrics[2]
 
     # broadcast metrics from 0 to all nodes
-    # dist.broadcast(ret_metrics_mean, 0)
+    dist.broadcast(ret_metrics_mean, 0)
     pix_acc, mean_acc, miou = ret_metrics_mean
     ret = dict(pixel_accuracy=pix_acc, mean_accuracy=mean_acc, mean_iou=miou)
     return ret

@@ -25,7 +25,7 @@ import cv2
 import torch.nn.functional as F
 from utils.copy_paste import CopyPaste
 from utils import (IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD, PAD_MASK_VALUE,
-                   SEG_IGNORE_INDEX)
+                   SEG_IGNORE_INDEX, SUN_MEAN, SUN_STD)
 
 from .dataset_folder import ImageFolder, MultiTaskImageFolder
 
@@ -95,7 +95,7 @@ def simple_transform(train: bool,
 
     else:
         transform = A.Compose([
-            A.SmallestMaxSize(max_size=input_size, p=1.0),  # 짧은 축이 256이 되도록 사이즈 조절
+            A.SmallestMaxSize(max_size=input_size, p=1.0),
             A.CenterCrop(height=input_size, width=input_size, p=1.0),
             A.Normalize(mean=IMAGENET_DEFAULT_MEAN, std=IMAGENET_DEFAULT_STD),
             ToTensorV2(),

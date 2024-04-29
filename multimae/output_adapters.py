@@ -378,12 +378,11 @@ class SegmenterMaskTransformerAdapter(nn.Module):
     def __init__(
             self,
             num_classes,
-            task_specific_prompt_length :int,
             depth: int = 2,
             num_heads: int = 12,
             embed_dim: int = 768,
             mlp_ratio=4,
-            drop_path_rate=0.00,
+            drop_path_rate=0.1,
             drop_rate=0.0,
             attn_drop_rate=0.0,
             qkv_bias=True,
@@ -393,25 +392,26 @@ class SegmenterMaskTransformerAdapter(nn.Module):
             **kwargs,
     ):
         super().__init__()
-        self.task_specific_prompt_length = task_specific_prompt_length
         self.main_tasks = main_tasks
         self.patch_size = patch_size
         self.embed_dim = embed_dim
         self.num_classes = num_classes
 
+        self.cls_emb = nn.Parameter(torch.zeros(1, num_classes, embed_dim))
+        trunc_normal_(self.cls_emb, std=0.02)
+
         self.patch_proj = nn.Linear(embed_dim, embed_dim, bias=False)
         self.classes_proj = nn.Linear(embed_dim, embed_dim, bias=False)
-        self.final_layer = nn.Conv2d(self.task_specific_prompt_length ,self.num_classes, 1)
-        
+
         dpr = [x.item() for x in torch.linspace(0, drop_path_rate, depth)]
         self.blocks = nn.ModuleList([
             Block(dim=embed_dim, num_heads=num_heads, mlp_ratio=mlp_ratio, qkv_bias=qkv_bias, drop=drop_rate,
-                  attn_drop=attn_drop_rate, drop_path=dpr[i], norm_layer=norm_layer,use_prompt_mask=False,prompt_size= 0 )
+                  attn_drop=attn_drop_rate, drop_path=dpr[i], norm_layer=norm_layer,use_prompt_mask=None,prompt_size=0)
             for i in range(depth)
         ])
 
         self.decoder_norm = norm_layer(embed_dim)
-        self.mask_norm = norm_layer(self.task_specific_prompt_length)
+        self.mask_norm = norm_layer(num_classes)
         self.apply(self._init_weights)
 
     def init(self, dim_tokens_enc: int = 768):
@@ -426,7 +426,7 @@ class SegmenterMaskTransformerAdapter(nn.Module):
         # Projection of encoder tokens to the patch dimension
         self.proj_dec = nn.Linear(self.in_channels, self.embed_dim)
         self._init_weights(self.proj_dec)
-    
+
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
             trunc_normal_(m.weight, std=.02)
@@ -436,12 +436,10 @@ class SegmenterMaskTransformerAdapter(nn.Module):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
 
-
     def adapt_tokens(self, encoder_tokens, input_info):
         # Adapt tokens
         
         x = encoder_tokens
-        
         return x 
 
     def forward(self, encoder_tokens: torch.Tensor, input_info: Dict):
@@ -449,16 +447,18 @@ class SegmenterMaskTransformerAdapter(nn.Module):
         N_H, N_W = H // self.patch_size, W // self.patch_size
 
         x = self.adapt_tokens(encoder_tokens, input_info)
-
+        x = x[:,N_H*N_W:,:]
         x = self.proj_dec(x)
+        cls_emb = self.cls_emb.expand(x.shape[0], -1, -1)
+        x = torch.cat((x, cls_emb), 1)
 
         for blk in self.blocks:
             x = blk(x)
 
         x = self.decoder_norm(x)
 
-        patches = self.patch_proj(x[:, 1+self.task_specific_prompt_length:,:])
-        cls_seg_feat = self.classes_proj(x[:, :self.task_specific_prompt_length, : ])
+        patches = self.patch_proj(x[:, :-self.num_classes])
+        cls_seg_feat = self.classes_proj(x[:, -self.num_classes:])
 
         patches = F.normalize(patches, dim=2, p=2)
         cls_seg_feat = F.normalize(cls_seg_feat, dim=2, p=2)
@@ -466,11 +466,13 @@ class SegmenterMaskTransformerAdapter(nn.Module):
         masks = patches @ cls_seg_feat.transpose(1, 2)
         masks = self.mask_norm(masks)
         masks = rearrange(masks, "b (nh nw) c -> b c nh nw", nh=N_H, nw=N_W)
-        # masks = self.final_layer(masks)
+
         # Interpolate to semseg res
         masks = F.interpolate(masks, size=(H, W), mode="bilinear")
 
         return masks
+
+
 
 class CrossMultiHeadAttention(nn.Module):
     def __init__(self, embed_dim, num_heads):
