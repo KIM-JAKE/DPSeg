@@ -447,7 +447,6 @@ class SegmenterMaskTransformerAdapter(nn.Module):
         N_H, N_W = H // self.patch_size, W // self.patch_size
 
         x = self.adapt_tokens(encoder_tokens, input_info)
-        x = x[:,N_H*N_W:,:]
         x = self.proj_dec(x)
         cls_emb = self.cls_emb.expand(x.shape[0], -1, -1)
         x = torch.cat((x, cls_emb), 1)
@@ -700,13 +699,10 @@ class ConvNeXtAdapter(nn.Module):
         origin_x = x
         x = self.proj_dec(x)
     
-        x = x[:,1+  self.task_specific_prompt_length + N_H * N_W :,:] #RGB만 남겨놓고
+        x = x[:,1+  self.task_specific_prompt_length :,:] #RGB만 남겨놓고
        
     #   # pseudo semseg
-        # prompt_seg =(origin_x[:,1+  self.task_specific_prompt_length + N_H * N_W  :,:] @ origin_prompts_1.transpose(1,2) )
-        # origin_prompts_1 = self.sa(origin_prompts_1)
-        # origin_prompts_1 = self.mlp(origin_prompts_1)
-        p_to_im =  (self.ca_1(origin_x[:,1+  self.task_specific_prompt_length + N_H * N_W  :,:] ,origin_prompts_1)) # B image 768
+        p_to_im =  (self.ca_1(origin_x[:,1+  self.task_specific_prompt_length  :,:] ,origin_prompts_1)) # B image 768
         im_to_p = (origin_prompts_1 + self.ca_2(origin_prompts_1 , p_to_im)) # B prompt 768
         prompt_seg = (p_to_im @ im_to_p.transpose(1,2)) 
         prompt_seg = rearrange(prompt_seg ,"b (h w) c -> b c h w" , h = N_H , w = N_W)
@@ -723,7 +719,7 @@ class ConvNeXtAdapter(nn.Module):
                         pw=int(self.preds_per_patch ** 0.5))
         
         x = self.blocks(x)
-        #x = self.norm2(x)
+        # x = self.norm2(x)
         x = self.final_layer(x) # B 40 160 160  , prompt = B 40 6144
         x = F.interpolate(x, size=(H, W), mode=self.interpolate_mode )
         return x  , prompt_seg 

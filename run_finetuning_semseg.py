@@ -360,7 +360,7 @@ def main(args):
     if dataset_val is not None:
         data_loader_val = torch.utils.data.DataLoader(
             dataset_val, sampler=sampler_val,
-            batch_size=args.batch_size * 4,
+            batch_size=args.batch_size * 2,
             num_workers=args.num_workers,
             pin_memory=args.pin_mem,
             drop_last=False
@@ -527,13 +527,13 @@ def main(args):
         fcl = FocalLoss(ignore_index=255)
         fc_loss = fcl(real_preds,target)
         mse = torch.nn.MSELoss()
-        target = label_to_one_hot_label(target ,25 , 'cuda:0' )
+        target = label_to_one_hot_label(target ,40 , 'cuda:0' )
         mse_loss = mse(real_preds, target)
         loss_prompt_seg = mse(prompt_seg,target)
         
         loss = (fc_loss * 20 + mse_loss) + (150* loss_prompt_seg) 
         # loss = loss_prompt_seg
-        
+        #print(("Image Loss:", fc_loss * 20 + mse_loss).item() ,"SGT Loss: ", (150* loss_prompt_seg).item())
         return loss
     
     # criterion = FocalLoss(alpha = alpha.to('cuda:0'))
