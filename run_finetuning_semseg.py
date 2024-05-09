@@ -786,25 +786,34 @@ def evaluate(model, criterion, data_loader, device, epoch, in_domains, num_class
             seg_pred, seg_gt  = preds['semseg'], tasks_dict['semseg'] 
             loss = criterion(seg_pred, seg_gt)
 
-        # output_dir = "/root/datasets/t-sne"
-        # prompts = seg_pred[2].detach().cpu()
-        # prompts = prompts.squeeze(0).numpy()
+        prompts = seg_pred[2].detach().cpu()
+        attention_mean = prompts.mean(dim=1)
 
-        # # Perform t-SNE
-        # tsne = TSNE(n_components=2, perplexity=5,learning_rate=200, n_iter=1000,random_state=42)
-        # prompts_tsne = tsne.fit_transform(prompts)
+        # t-SNE 적용
+        tsne = TSNE(n_components=2, perplexity=30, learning_rate=200, n_iter=1000, random_state=42)
+        attention_tsne = tsne.fit_transform(attention_mean.squeeze(0))
 
-        # # Create a plot
-        # plt.figure(figsize=(10, 6))
-        # plt.scatter(prompts_tsne[:, 0], prompts_tsne[:, 1])
-        # plt.title('t-SNE Visualization of Last Layer Prompts')
-        # plt.xlabel('Component 1')
-        # plt.ylabel('Component 2')
+        # KMeans 클러스터링을 적용하여 데이터 포인트 그룹화
+        kmeans = KMeans(n_clusters=7, random_state=42)
+        clusters = kmeans.fit_predict(attention_tsne)
 
-        # # Save the plot with a unique name
-        # timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        # filename = f"{output_dir}/t_sne_plot_{timestamp}.png"
-        # plt.savefig(filename)
+        # 클러스터별 색상을 정의
+        cluster_colors = plt.cm.get_cmap("viridis", 7)  # 5개 클러스터를 위한 색상 맵
+
+        # 플롯 생성
+        plt.figure(figsize=(10, 6))
+        for idx, point in enumerate(attention_tsne):
+            plt.scatter(point[0], point[1], color=cluster_colors(clusters[idx]), s=10)  # 각 포인트에 클러스터별 색상 적용
+
+        plt.title('t-SNE Visualization of Attention Scores')
+        plt.xlabel('Component 1')
+        plt.ylabel('Component 2')
+
+        # 플롯 저장
+        output_dir = "/root/workspace/t-sne-grad-ade"
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        filename = f"{output_dir}/attention_tsne_plot_{timestamp}.png"
+        plt.savefig(filename)
         
         loss_value = loss.item()
         # If there is void, exclude it from the preds and take second highest class

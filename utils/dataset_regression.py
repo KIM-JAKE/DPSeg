@@ -115,7 +115,7 @@ class DataAugmentationForRegression(object):
         # And then replace it back to rgb
         task_dict['rgb'] = task_dict.pop('image')
 
-        task_dict['mask_valid'] = (task_dict['mask_valid'] == 255)[None]
+        # task_dict['mask_valid'] = (task_dict['mask_valid'] == 255)[None]
 
         for task in task_dict:
             if task in ['depth']:

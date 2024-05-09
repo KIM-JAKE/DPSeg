@@ -4,7 +4,7 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 # --------------------------------------------------------
-# Based on timm, DeiT, DINO, MoCo-v3, BEiT, MAE-priv, MAE and MMSegmentation code bases
+# Based on timm, DeiT, DINO, MoCo-v3, BEiT, MAE-priv and MAE code bases
 # https://github.com/rwightman/pytorch-image-models/tree/master/timm
 # https://github.com/facebookresearch/deit
 # https://github.com/facebookresearch/dino
@@ -12,79 +12,59 @@
 # https://github.com/microsoft/unilm/tree/master/beit
 # https://github.com/BUPT-PRIV/MAE-priv
 # https://github.com/facebookresearch/mae
-# https://github.com/open-mmlab/mmsegmentation
 # --------------------------------------------------------
 import argparse
 import datetime
 import json
+import math
 import os
+import sys
 import time
 import warnings
 from functools import partial
+from utils.focal_loss import FocalLoss, label_to_one_hot_label
 from pathlib import Path
-from typing import Dict, Iterable
-from utils.data_constants import NYU_MEAN, NYU_STD
+from typing import Dict, Iterable, List, Optional, Union
 
 import numpy as np
 import torch
 import torch.backends.cudnn as cudnn
-import torch.distributed as dist
 import torch.nn.functional as F
 import yaml
-from utils.dataset_regression import build_regression_dataset, nyu_transform
 from einops import rearrange
+
 import utils
 import utils.data_constants as data_constants
 from multimae import multimae_l2p
-from multimae.input_adapters import PatchedInputAdapter, SemSegInputAdapter, PromptPatchedInputAdapter
-from multimae.output_adapters import (ConvNeXtAdapter, DPTOutputAdapter,
-                                      SegmenterMaskTransformerAdapter)
+from multimae.input_adapters import PatchedInputAdapter
+from multimae.output_adapters import ConvNeXtAdapter, DPTOutputAdapter ,VPTAdapter,ViTAdapter,SegmenterMaskTransformerAdapter
 from utils import NativeScalerWithGradNormCount as NativeScaler
 from utils import create_model
-from utils.data_constants import COCO_SEMSEG_NUM_CLASSES
-from utils.datasets_semseg import build_semseg_dataset, simple_transform
-# from utils.dist import collect_results_cpu
-from utils.log_images import log_semseg_wandb
+from utils.data_constants import NYU_MEAN, NYU_STD
+from utils.dataset_regression import build_regression_dataset, nyu_transform
+from utils.log_images import log_taskonomy_wandb
 from utils.optim_factory import LayerDecayValueAssigner, create_optimizer
 from utils.pos_embed import interpolate_pos_embed_multimae
-from utils.semseg_metrics import mean_iou
 
-DOMAIN_CONF = {
-    'rgb': {
-        'channels': 3,
-        'stride_level': 1,
-        'aug_type': 'image',
-        'input_adapter': partial(PromptPatchedInputAdapter, num_channels=3),
-    },
-    'depth': {
-        'channels': 1,
-        'stride_level': 1,
-        'aug_type': 'mask',
-        'input_adapter': partial(PatchedInputAdapter, num_channels=1),
-    },
-    'semseg': {
-        'stride_level': 4,
-        'aug_type': 'mask',
-        'input_adapter': partial(SemSegInputAdapter, num_classes=COCO_SEMSEG_NUM_CLASSES,
-                                 dim_class_emb=64, interpolate_class_emb=False,
-                                 emb_padding_idx=COCO_SEMSEG_NUM_CLASSES),
-    },
-    'pseudo_semseg': {
-        'aug_type': 'mask'
-    },
-    'mask_valid': {
-        'stride_level': 1,
-        'aug_type': 'mask',
-    },
-}
+
+def masked_mse_loss(preds, target, mask_valid=None):
+    if mask_valid is None:
+        mask_valid = torch.ones_like(preds).bool()
+    if preds.shape[1] != mask_valid.shape[1]:
+        mask_valid = mask_valid.repeat_interleave(preds.shape[1], 1)
+    element_wise_loss = (preds - target)**2
+    element_wise_loss[~mask_valid] = 0
+    return element_wise_loss.sum() / mask_valid.sum()
+
+
 def masked_l1_loss(preds, target, mask_valid=None):
-        if mask_valid is None:
-            mask_valid = torch.ones_like(preds).bool()
-        if preds.shape[1] != mask_valid.shape[1]:
-            mask_valid = mask_valid.repeat_interleave(preds.shape[1], 1)
-        element_wise_loss = abs(preds - target)
-        element_wise_loss[~mask_valid] = 0
-        return element_wise_loss.sum() / mask_valid.sum()
+    if mask_valid is None:
+        mask_valid = torch.ones_like(preds).bool()
+    if preds.shape[1] != mask_valid.shape[1]:
+        mask_valid = mask_valid.repeat_interleave(preds.shape[1], 1)
+    element_wise_loss = abs(preds - target)
+    element_wise_loss[~mask_valid] = 0
+    return element_wise_loss.sum() / mask_valid.sum()
 
 
 def masked_berhu_loss(preds, target, mask_valid=None):
@@ -107,7 +87,7 @@ def masked_berhu_loss(preds, target, mask_valid=None):
 @torch.no_grad()
 def masked_nyu_metrics(preds, target, mask_valid=None):
     # map to the original scale 
-    preds = preds[0] * NYU_STD + NYU_MEAN
+    preds = preds * NYU_STD + NYU_MEAN
     target = target * NYU_STD + NYU_MEAN
 
     if mask_valid is None:
@@ -137,60 +117,72 @@ def masked_nyu_metrics(preds, target, mask_valid=None):
     }
     return metrics
 
+DOMAIN_CONF = {
+    'rgb': {
+        'channels': 3,
+        'stride_level': 1,
+        'input_adapter': partial(PatchedInputAdapter, num_channels=3),
+        'aug_type': 'image',
+    },
+    'depth': {
+        'channels': 1,
+        'stride_level': 1,
+        'input_adapter': partial(PatchedInputAdapter, num_channels=1),
+        'aug_type': 'mask',
+    },
+    'mask_valid': {
+        'stride_level': 1,
+        'aug_type': 'mask',
+    },
+}
+
+
 def get_args():
     config_parser = parser = argparse.ArgumentParser(description='Training Config', add_help=False)
     parser.add_argument('-c', '--config', default='', type=str, metavar='FILE',
                         help='YAML config file specifying default arguments')
 
-    parser = argparse.ArgumentParser('MultiMAE semantic segmentation fine-tuning script', add_help=False)
-    parser.add_argument('--batch_size', default=4, type=int, help='Batch size per GPU')
-    parser.add_argument('--epochs', default=64, type=int)
-    parser.add_argument('--save_ckpt_freq', default=20, type=int)
+    parser = argparse.ArgumentParser('MultiMAE depth fine-tuning script', add_help=False)
+    parser.add_argument('--batch_size', default=64, type=int, help='Batch size per GPU')
+    parser.add_argument('--epochs', default=2000, type=int)
+    parser.add_argument('--save_ckpt_freq', default=200, type=int)
+    parser.add_argument('--tmp', default=False, action='store_true')
 
     # Task parameters
     parser.add_argument('--in_domains', default='rgb', type=str,
                         help='Input domain names, separated by hyphen')
+    parser.add_argument('--decoder_main_tasks', type=str, default='rgb',
+                        help='for convnext & DPT adapters, separate tasks with a hyphen')
     parser.add_argument('--standardize_depth', action='store_true')
     parser.add_argument('--no_standardize_depth', action='store_false', dest='standardize_depth')
-    parser.set_defaults(standardize_depth=True)
-    parser.add_argument('--use_mask_valid', action='store_true')
-    parser.add_argument('--no_mask_valid', action='store_false', dest='use_mask_valid')
-    parser.set_defaults(use_mask_valid=False)
-    parser.add_argument('--load_pseudo_depth', action='store_true')
-    parser.add_argument('--no_load_pseudo_depth', action='store_false', dest='load_pseudo_depth')
-    parser.set_defaults(load_pseudo_depth=False)
+    parser.set_defaults(standardize_depth=False)
 
     # Model parameters
     parser.add_argument('--model', default='multivit_base', type=str, metavar='MODEL',
-                        help='Name of model to train')
+                        help='Name of MultiViT model to train')
     parser.add_argument('--num_global_tokens', default=1, type=int,
                         help='number of global tokens to add to encoder')
     parser.add_argument('--patch_size', default=16, type=int,
                         help='base patch size for image-like modalities')
-    parser.add_argument('--input_size', default=512, type=int,
+    parser.add_argument('--input_size', default=256, type=int,
                         help='images input size for backbone')
-    parser.add_argument('--drop_path_encoder', type=float, default=0.1, metavar='PCT',
-                        help='Drop path rate (default: 0.1)')
+    parser.add_argument('--drop_path_encoder', type=float, default=0.0, metavar='PCT',
+                        help='Drop path rate (default: 0.0)')
     parser.add_argument('--learnable_pos_emb', action='store_true',
                         help='Makes the positional embedding learnable')
     parser.add_argument('--no_learnable_pos_emb', action='store_false', dest='learnable_pos_emb')
     parser.set_defaults(learnable_pos_emb=False)
-
-    parser.add_argument('--output_adapter', type=str, default='convnext',
-                        choices=['segmenter', 'convnext', 'dpt','multidpt'],
-                        help='One of [segmenter,  convnext, dpt] (default: convnext)')
+    parser.add_argument('--output_adapter', type=str, default='dpt',
+                        choices=['dpt', 'convnext'],
+                        help='One of [dpt, convnext] (default: dpt)')
     parser.add_argument('--decoder_dim', default=6144, type=int,
-                        help='Token dimension for the decoder layers, for convnext and segmenter adapters')
+                        help='Token dimension inside the decoder layers (for convnext adapter)')
     parser.add_argument('--decoder_depth', default=4, type=int,
-                        help='Depth of decoder (for convnext and segmenter adapters')
+                        help='Depth of decoder (for convnext adapter)')
     parser.add_argument('--drop_path_decoder', type=float, default=0.0, metavar='PCT',
                         help='Drop path rate (default: 0.0)')
-    parser.add_argument('--decoder_preds_per_patch', type=int, default=16,
+    parser.add_argument('--decoder_preds_per_patch', type=int, default=64,
                         help='Predictions per patch for convnext adapter')
-    parser.add_argument('--decoder_interpolate_mode', type=str, default='bilinear',
-                        choices=['bilinear', 'nearest'], help='for convnext adapter')
-    parser.add_argument('--decoder_main_tasks', type=str, default='rgb',
-                        help='for convnext adapter, separate tasks with a hyphen')
 
     # Optimizer parameters
     parser.add_argument('--opt', default='adamw', type=str, metavar='OPTIMIZER',
@@ -203,53 +195,52 @@ def get_args():
                         help='Clip gradient norm (default: None, no clipping)')
     parser.add_argument('--momentum', type=float, default=0.9, metavar='M',
                         help='SGD momentum (default: 0.9)')
-    parser.add_argument('--weight_decay', type=float, default=0.05,
-                        help='weight decay (default: 0.05)')
+    parser.add_argument('--weight_decay', type=float, default=1e-4,
+                        help='weight decay (default: 1e-4)')
     parser.add_argument('--weight_decay_end', type=float, default=None, help="""Final value of the
         weight decay. We use a cosine schedule for WD. 
         (Set the same value with args.weight_decay to keep weight decay no change)""")
     parser.add_argument('--decoder_decay', type=float, default=None,
                         help='decoder weight decay')
-    parser.add_argument('--no_lr_scale_list', type=str, default='',
-                        help='Weights that should not be affected by layer decay rate, separated by hyphen.')
 
     parser.add_argument('--lr', type=float, default=1e-4, metavar='LR',
-                        help='learning rate (default: 1e-4)')
+                        help='learning rate  (default: 1e-4)')
     parser.add_argument('--warmup_lr', type=float, default=1e-6, metavar='LR',
                         help='warmup learning rate (default: 1e-6)')
     parser.add_argument('--min_lr', type=float, default=0.0, metavar='LR',
                         help='lower lr bound for cyclic schedulers that hit 0 (0.0)')
     parser.add_argument('--layer_decay', type=float, default=0.75,
                         help='layer-wise lr decay from ELECTRA')
+    parser.add_argument('--scale_input_lr', action='store_true')
+    parser.add_argument('--no_scale_input_lr', action='store_false', dest='scale_input_lr')
+    parser.set_defaults(scale_input_lr=True)
+    parser.add_argument('--freeze_transformer', action='store_true')
+    parser.add_argument('--no_freeze_transformer', action='store_false', dest='freeze_transformer')
+    parser.set_defaults(freeze_transformer=False)
 
-    parser.add_argument('--warmup_epochs', type=int, default=1, metavar='N',
+    parser.add_argument('--warmup_epochs', type=int, default=100, metavar='N',
                         help='epochs to warmup LR, if scheduler supports')
     parser.add_argument('--warmup_steps', type=int, default=-1, metavar='N',
                         help='epochs to warmup LR, if scheduler supports')
 
+    # Finetuning parameters
+    parser.add_argument('--finetune', default='', help='finetune from checkpoint')
+    parser.add_argument('--loss', default='berhu',
+                        help='Loss to use. One of [l1, l2, berhu] (default: berhu)')
+
+    # Dataset parameters
+    parser.add_argument('--data_path', default=data_constants.NYU_TRAIN_PATH, type=str, help='dataset path')
+    parser.add_argument('--eval_data_path', default=data_constants.NYU_TEST_PATH, type=str,
+                        help='dataset path for evaluation')
     parser.add_argument('--aug_name', default='nyu-augs', type=str)
     parser.add_argument('--color_augs', default=False, action='store_true')
     parser.add_argument('--no_color_augs', dest='color_augs', default=False, action='store_false')
+    parser.add_argument('--eval_freq', default=1, type=int, help="frequency of evaluation")
+    parser.add_argument('--max_train_images', default=1000, type=int, help='number of train images')
+    parser.add_argument('--max_val_images', default=100, type=int, help='number of validation images')
+    parser.add_argument('--max_test_images', default=100, type=int, help='number of test images')
 
-    # Finetuning parameters
-    parser.add_argument('--finetune', default='', help='finetune from checkpoint')
-
-    # Dataset parameters
-    parser.add_argument('--num_classes', default=40, type=int, help='number of semantic classes')
-    parser.add_argument('--dataset_name', default='nyuv2', type=str, help='dataset name for plotting')
-    parser.add_argument('--data_path', default=data_constants.ADE_TRAIN_PATH, type=str, help='dataset path')
-    parser.add_argument('--eval_data_path', default=data_constants.ADE_VAL_PATH, type=str,
-                        help='dataset path for evaluation')
-    parser.add_argument('--test_data_path', default=None, type=str,
-                        help='dataset path for testing')
-    parser.add_argument('--max_val_images', default=None, type=int,
-                        help='maximum number of validation images. (default: None)')
-    parser.add_argument('--eval_freq', default=200, type=int, help="frequency of evaluation")
-    parser.add_argument('--seg_reduce_zero_label', action='store_true',
-                        help='set label 0 to ignore, reduce all other labels by 1')
-    parser.add_argument('--seg_use_void_label', action='store_true', help='label border as void instead of ignore')
-
-    parser.add_argument('--output_dir', default=None,
+    parser.add_argument('--output_dir', default='',
                         help='path where to save, empty for no saving')
     parser.add_argument('--device', default='cuda',
                         help='device to use for training / testing')
@@ -284,33 +275,30 @@ def get_args():
     parser.add_argument('--no_find_unused_params', action='store_false', dest='find_unused_params')
     parser.set_defaults(find_unused_params=True)
 
-    parser.add_argument('--fp16', action='store_true')
-    parser.add_argument('--no_fp16', action='store_false', dest='fp16')
-    parser.set_defaults(fp16=True)
-
     # Wandb logging
-    parser.add_argument('--log_wandb', default=True, action='store_true',
+    parser.add_argument('--log_wandb', default=False, action='store_true',
                         help='log training and validation metrics to wandb')
-    parser.add_argument('--wandb_project', default='URP_NYUv2', type=str,
+    parser.add_argument('--no_log_wandb', dest='log_wandb', default=False, action='store_false',
                         help='log training and validation metrics to wandb')
-    parser.add_argument('--wandb_entity', default='URP', type=str,
+    parser.add_argument('--wandb_project', default=None, type=str,
+                        help='log training and validation metrics to wandb')
+    parser.add_argument('--wandb_entity', default=None, type=str,
                         help='user or team name of wandb')
     parser.add_argument('--wandb_run_name', default=None, type=str,
                         help='run name on wandb')
+    parser.add_argument('--wandb_group', default='', type=str)
     parser.add_argument('--log_images_wandb', action='store_true')
     parser.add_argument('--log_images_freq', default=5, type=int,
                         help="Frequency of image logging (in epochs)")
     parser.add_argument('--show_user_warnings', default=False, action='store_true')
 
-    # Distributed training parameters
+
+    # distributed training parameters
     parser.add_argument('--world_size', default=1, type=int,
                         help='number of distributed processes')
     parser.add_argument('--local_rank', default=-1, type=int)
     parser.add_argument('--dist_on_itp', action='store_true')
     parser.add_argument('--dist_url', default='env://', help='url used to set up distributed training')
-    parser.add_argument('--freeze', default=['encoder'], nargs='*', type=list, help='freeze part in backbone model')
-    parser.add_argument('--loss', default='l1',
-                        help='Loss to use. One of [l1, l2, berhu] (default: berhu)')   
 
     # Do we have a config file to parse?
     args_config, remaining = config_parser.parse_known_args()
@@ -327,6 +315,8 @@ def get_args():
 
 
 def main(args):
+
+    utils.init_distributed_mode(args)
     device = torch.device(args.device)
 
     # fix the seed for reproducibility
@@ -340,16 +330,22 @@ def main(args):
     if not args.show_user_warnings:
         warnings.filterwarnings("ignore", category=UserWarning)
 
+    num_tasks = utils.get_world_size()
+    global_rank = utils.get_rank()
+
+    if global_rank == 0 and args.log_wandb:
+        log_writer = utils.WandbLogger(args)
+    else:
+        log_writer = None
+
     args.in_domains = args.in_domains.split('-')
-    args.out_domains = ['semseg']
+    args.out_domains = ['depth']
     args.all_domains = list(set(args.in_domains) | set(args.out_domains))
     if args.use_mask_valid:
         args.all_domains.append('mask_valid')
     if 'rgb' not in args.all_domains:
         args.all_domains.append('rgb')
-    args.num_classes_with_void = args.num_classes + 1 if args.seg_use_void_label else args.num_classes
 
-    # Dataset stuff
     additional_targets = {domain: DOMAIN_CONF[domain]['aug_type'] for domain in args.all_domains}
 
     if args.aug_name == 'nyu-augs':
@@ -362,16 +358,32 @@ def main(args):
     dataset_val = build_regression_dataset(args, data_path=args.eval_data_path, transform=val_transform, max_images=args.max_val_images)
     dataset_test = None
 
-    sampler_train = torch.utils.data.RandomSampler(dataset_train)
-    sampler_val = torch.utils.data.SequentialSampler(dataset_val)
-    
-    if dataset_test is not None:
-        sampler_test = torch.utils.data.SequentialSampler(dataset_test)
-
-    if args.log_wandb:
-        log_writer = utils.WandbLogger(args)
+    if True:  # args.distributed:
+        num_tasks = utils.get_world_size()
+        global_rank = utils.get_rank()
+        sampler_train = torch.utils.data.DistributedSampler(
+            dataset_train, num_replicas=num_tasks, rank=global_rank, shuffle=True, drop_last=True,
+        )
+        print("Sampler_train = %s" % str(sampler_train))
+        if args.dist_eval:
+            if len(dataset_val) % num_tasks != 0:
+                print('Warning: Enabling distributed evaluation with an eval dataset not divisible by process number. '
+                      'This will slightly alter validation results as extra duplicate entries are added to achieve '
+                      'equal num of samples per-process.')
+            sampler_val = torch.utils.data.DistributedSampler(
+                dataset_val, num_replicas=num_tasks, rank=global_rank, shuffle=False)
+            if dataset_test is not None:
+                sampler_test = torch.utils.data.DistributedSampler(
+                    dataset_test, num_replicas=num_tasks, rank=global_rank, shuffle=False)
+        else:
+            sampler_val = torch.utils.data.SequentialSampler(dataset_val)
+            if dataset_test is not None:
+                sampler_test = torch.utils.data.SequentialSampler(dataset_test)
     else:
-        log_writer = None
+        sampler_train = torch.utils.data.RandomSampler(dataset_train)
+        sampler_val = torch.utils.data.SequentialSampler(dataset_val)
+        if dataset_test is not None:
+            sampler_test = torch.utils.data.SequentialSampler(dataset_test)
 
     data_loader_train = torch.utils.data.DataLoader(
         dataset_train, sampler=sampler_train,
@@ -379,83 +391,69 @@ def main(args):
         num_workers=args.num_workers,
         pin_memory=args.pin_mem,
         drop_last=True,
+        persistent_workers=True,
+    )
+    data_loader_val = torch.utils.data.DataLoader(
+        dataset_val, sampler=sampler_val,
+        batch_size=int(1.5*args.batch_size),
+        num_workers=args.num_workers,
+        pin_memory=args.pin_mem,
+        drop_last=False,
+        persistent_workers=True,
     )
 
-    if dataset_val is not None:
-        data_loader_val = torch.utils.data.DataLoader(
-            dataset_val, sampler=sampler_val,
-            batch_size=args.batch_size,
-            num_workers=args.num_workers,
-            pin_memory=args.pin_mem,
-            drop_last=False
-        )
-    else:
-        data_loader_val = None
-
-    if dataset_test is not None:
-        data_loader_test = torch.utils.data.DataLoader(
-            dataset_test, sampler=sampler_test,
-            batch_size=args.batch_size,
-            num_workers=args.num_workers,
-            pin_memory=args.pin_mem,
-            drop_last=False
-        )
-    else:
-        data_loader_test = None
-
     # Model
-    if 'pseudo_semseg' in args.in_domains:
-        args.in_domains.remove('pseudo_semseg')
-        args.in_domains.append('semseg')
 
-    # input_adapters = {
-    #     domain: DOMAIN_CONF[domain]['input_adapter'](
-    #         stride_level=DOMAIN_CONF[domain]['stride_level'],
-    #         patch_size_full=args.patch_size,
-    #         image_size=args.input_size,
-    #         learnable_pos_emb=args.learnable_pos_emb,
-    #     )
-    #     for domain in args.in_domains
-    # }
+    # Rename depth task
+    if 'depth_zbuffer' in args.in_domains:
+        args.in_domains.remove('depth_zbuffer')
+        args.in_domains.append('depth')
+    if 'depth_zbuffer' in args.out_domains:
+        args.out_domains.remove('depth_zbuffer')
+        args.out_domains.append('depth')
+
+    input_adapters = {
+        domain: DOMAIN_CONF[domain]['input_adapter'](
+            stride_level=DOMAIN_CONF[domain]['stride_level'],
+            patch_size_full=args.patch_size,
+            image_size=args.input_size,
+            learnable_pos_emb=args.learnable_pos_emb
+        )
+        for domain in args.in_domains
+    }
 
     # DPT settings are fixed for ViT-B. Modify them if using a different backbone.
     if args.model != 'multivit_base' and args.output_adapter == 'dpt':
         raise NotImplementedError('Unsupported backbone: DPT head is fixed for ViT-B.')
 
     adapters_dict = {
+        'vit' :  partial(ViTAdapter, depth=args.decoder_depth, drop_path_rate=args.drop_path_decoder),
+        'vpt' : partial(VPTAdapter, preds_per_patch=args.decoder_preds_per_patch, depth=args.decoder_depth,
+                            interpolate_mode='bilinear', main_tasks=args.decoder_main_tasks.split('-')),
         'segmenter': partial(SegmenterMaskTransformerAdapter, depth=args.decoder_depth, drop_path_rate=args.drop_path_decoder),
         'convnext': partial(ConvNeXtAdapter, preds_per_patch=args.decoder_preds_per_patch, depth=args.decoder_depth,
-                            interpolate_mode=args.decoder_interpolate_mode, main_tasks=args.decoder_main_tasks.split('-')),
+                            interpolate_mode='bilinear', main_tasks=args.decoder_main_tasks.split('-')),
         'dpt': partial(DPTOutputAdapter, stride_level=1, main_tasks=args.decoder_main_tasks.split('-'), head_type='semseg'),
     }
 
     output_adapters = {
-        'depth' : adapters_dict['convnext'](num_classes=DOMAIN_CONF['depth']['channels'],
-            stride_level=DOMAIN_CONF['depth']['stride_level'],
-            patch_size=args.patch_size, 
+        'depth': adapters_dict[args.output_adapter](
+            num_classes= 1 ,
+            embed_dim=args.decoder_dim, patch_size=args.patch_size, 
             prompt_deep = args.prompt_deep , prompt_shallow = args.prompt_shallow,
-            prompt_pool = args.prompt_pool,main_tasks=args.decoder_main_tasks.split('-'),
-            prompt_length = args.length , top_k = args.top_k , pool_size = args.size, task_specific_prompt_length = args.task_specific_prompt_length , not_self_attn = args.not_self_attn , 
-        ),
-    }
+            prompt_pool = args.prompt_pool,
+            prompt_length = args.length , top_k = args.top_k , pool_size = args.size , task_specific_prompt_length = args.task_specific_prompt_length , not_self_attn = args.not_self_attn , 
+        ),    }
 
     model = create_model(
         args.model,
-        input_adapters ={'rgb': PromptPatchedInputAdapter(num_channels=3,
-        stride_level=1,
-        patch_size_full=args.patch_size,
-        image_size=args.input_size,
-        learnable_pos_emb=args.learnable_pos_emb,
-        prompt_length=args.length,
-        top_k=args.top_k,
-        pool_size=args.size
-        )},
+        input_adapters=input_adapters,
         output_adapters=output_adapters,
-        drop_path_rate=args.drop_path_encoder,
+        drop_path_rate=args.drop_path_encoder, 
         use_prompt_mask=args.use_prompt_mask,
         prompt_deep = args.prompt_deep , prompt_shallow = args.prompt_shallow,
-            prompt_pool = args.prompt_pool,
-            prompt_length = args.length , top_k = args.top_k , pool_size = args.size , not_self_attn = args.not_self_attn , 
+        prompt_pool = args.prompt_pool,
+        prompt_length = args.length , top_k = args.top_k , pool_size = args.size , not_self_attn = args.not_self_attn , 
         task_specific_prompt_length = args.task_specific_prompt_length
     )
 
@@ -468,9 +466,10 @@ def main(args):
 
         checkpoint_model = checkpoint['model']
 
-        class_emb_key = 'input_adapters.semseg.class_emb.weight'
-        if class_emb_key in checkpoint_model:
-            checkpoint_model[class_emb_key] = F.pad(checkpoint_model[class_emb_key], (0, 0, 0, 1))
+        # # Remove keys for semantic segmentation
+        # for k in list(checkpoint_model.keys()):
+        #     if "semseg" in k:
+        #         del checkpoint_model[k]
 
         # Remove output adapters
         for k in list(checkpoint_model.keys()):
@@ -483,34 +482,12 @@ def main(args):
         # Load pre-trained model
         msg = model.load_state_dict(checkpoint_model, strict=False)
         print(msg)
-        
-    if args.freeze:
-        # freeze args.freeze[encoder,blocks, patch_embed, cls_token] parameters
-        for n, p in model.named_parameters():
-            if n.startswith('encoder'):
-                p.requires_grad = False
-                
-        for name, param in model.named_parameters():
-            if any(substr in name for substr in ['input_adapters', 'output_adapters', 'bias']):
-                param.requires_grad = True
 
-    # check frozen well 
-    for n,p in model.named_parameters():
-        if p.requires_grad:
-          print('Unfrozen :' , n)
-    
-    if args.loss == 'l1':
-        tasks_loss_fn = {
-            'depth': masked_l1_loss
-        }     
-    model.to(device)
-
-    model_without_ddp = model
-
-    n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    
-    # print("Model = %s" % str(model_without_ddp))
-    print('number of l2p model params: {} M'.format(n_parameters / 1e6))
+    # Optionally freeze the encoder
+    if args.freeze_transformer:
+        raise NotImplementedError
+        for param in model.encoder.parameters():
+            param.requires_grad = False
 
     model.to(device)
 
@@ -519,6 +496,17 @@ def main(args):
 
     print("Model = %s" % str(model_without_ddp))
     print('number of params: {} M'.format(n_parameters / 1e6))
+
+    if args.loss == 'l1':
+        tasks_loss_fn = {
+            'depth': masked_l1_loss
+        }
+    elif args.loss == 'berhu':
+        tasks_loss_fn = {
+            'depth': masked_berhu_loss
+        }
+    else:
+        raise NotImplementedError
 
     total_batch_size = args.batch_size * utils.get_world_size()
     num_training_steps_per_epoch = len(dataset_train) // total_batch_size
@@ -530,8 +518,11 @@ def main(args):
 
     num_layers = model_without_ddp.get_num_layers()
     if args.layer_decay < 1.0:
-        assigner = LayerDecayValueAssigner(
-            list(args.layer_decay ** (num_layers + 1 - i) for i in range(num_layers + 2)))
+        # idx=0: input adapters, idx>0: transformer layers 
+        layer_decay_values = list(args.layer_decay ** (num_layers + 1 - i) for i in range(num_layers + 2))
+        if not args.scale_input_lr:
+            layer_decay_values[0] = 1.0
+        assigner = LayerDecayValueAssigner(layer_decay_values)
     else:
         assigner = None
 
@@ -541,11 +532,14 @@ def main(args):
     skip_weight_decay_list = model.no_weight_decay()
     print("Skip weight decay list: ", skip_weight_decay_list)
 
+    if args.distributed:
+        model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], find_unused_parameters=args.find_unused_params)
+        model_without_ddp = model.module
 
     optimizer = create_optimizer(args, model_without_ddp, skip_list=skip_weight_decay_list,
             get_num_layer=assigner.get_layer_id if assigner is not None else None,
             get_layer_scale=assigner.get_scale if assigner is not None else None)
-    loss_scaler = NativeScaler(enabled=args.fp16)
+    loss_scaler = NativeScaler(enabled=False)
 
     print("Use step level LR & WD scheduler!")
     lr_schedule_values = utils.cosine_scheduler(
@@ -557,38 +551,48 @@ def main(args):
     wd_schedule_values = utils.cosine_scheduler(
         args.weight_decay, args.weight_decay_end, args.epochs, num_training_steps_per_epoch)
     print("Max WD = %.7f, Min WD = %.7f" % (max(wd_schedule_values), min(wd_schedule_values)))
-    
     def custom_loss(preds,target) :
-        real_preds, prompt_seg  = preds
-        fcl =  masked_berhu_loss
+        real_preds, prompt_seg = preds
+        fcl = masked_berhu_loss
         fc_loss = fcl(real_preds,target)
         mse = torch.nn.MSELoss()
-        
         mse_loss = mse(real_preds, target)
         loss_prompt_seg = mse(prompt_seg,target)
         
-        loss = (fc_loss * 20 + mse_loss) + (1* loss_prompt_seg) 
+        loss = (fc_loss * 20 + mse_loss) + (150* loss_prompt_seg) 
         # loss = loss_prompt_seg
         
         return loss
     
-    tasks_loss_fn = custom_loss
-
+    # criterion = FocalLoss(alpha = alpha.to('cuda:0'))
+    if args.output_adapter == 'convnext' :
+        tasks_loss_fn = custom_loss
+    elif args.output_adapter == 'vit' :
+        tasks_loss_fn = custom_loss
+    elif args.output_adapter == 'vpt':
+        tasks_loss_fn = masked_berhu_loss               
+    elif args.output_adapter == 'segmenter' :
+        tasks_loss_fn = masked_berhu_loss
+        
     print("criterion = %s" % str(tasks_loss_fn))
-
+    print("Output Adapter: ", args.output_adapter)
+    
+    
     # Specifies if transformer encoder should only return last layer or all layers for DPT
     return_all_layers = args.output_adapter in ['dpt']
 
     utils.auto_load_model(
         args=args, model=model, model_without_ddp=model_without_ddp, optimizer=optimizer, loss_scaler=loss_scaler)
 
-
     if args.eval:
-        val_stats = evaluate(model=model, tasks_loss_fn=tasks_loss_fn, data_loader=data_loader_val,
+        val_stats = evaluate(model=model, args=args,tasks_loss_fn=tasks_loss_fn, data_loader=data_loader_val,
                              device=device, epoch=-1, in_domains=args.in_domains, mode='val', log_images=True,
                              return_all_layers=return_all_layers, standardize_depth=args.standardize_depth)
         print(f"Performance of the network on the {len(dataset_val)} validation images")
         print(f"Loss {val_stats['loss']:.3f}")
+        if log_writer is not None:
+            log_writer.set_step(args.start_epoch * num_training_steps_per_epoch)
+            log_writer.update({**{f'val/{k}': v for k, v in val_stats.items()}, 'epoch': args.start_epoch})
         exit(0)
 
 
@@ -596,13 +600,15 @@ def main(args):
     start_time = time.time()
     min_val_loss = np.inf
     for epoch in range(args.start_epoch, args.epochs):
-        # if log_writer is not None:
-        #     log_writer.set_step(epoch * num_training_steps_per_epoch)
+        if args.distributed:
+            data_loader_train.sampler.set_epoch(epoch)
+        if log_writer is not None:
+            log_writer.set_step(epoch * num_training_steps_per_epoch)
         log_images = args.log_wandb and args.log_images_wandb and (epoch % args.log_images_freq == 0)
         train_stats = train_one_epoch(
             model=model, tasks_loss_fn=tasks_loss_fn, data_loader=data_loader_train,
             optimizer=optimizer, device=device, epoch=epoch, loss_scaler=loss_scaler,
-            max_norm=args.clip_grad,  start_steps=epoch * num_training_steps_per_epoch,
+            max_norm=args.clip_grad, log_writer=log_writer, start_steps=epoch * num_training_steps_per_epoch,
             lr_schedule_values=lr_schedule_values, wd_schedule_values=wd_schedule_values, 
             in_domains=args.in_domains, return_all_layers=return_all_layers,
             standardize_depth=args.standardize_depth,
@@ -616,7 +622,7 @@ def main(args):
 
         if epoch % args.eval_freq == 0 or epoch == args.epochs - 1:
             log_images = args.log_wandb and args.log_images_wandb and (epoch % args.log_images_freq == 0)
-            val_stats = evaluate(model=model, tasks_loss_fn=tasks_loss_fn, data_loader=data_loader_val,
+            val_stats = evaluate(model=model,args=args, tasks_loss_fn=tasks_loss_fn, data_loader=data_loader_val,
                                  device=device, epoch=epoch, in_domains=args.in_domains, log_images=log_images,
                                  mode='val', return_all_layers=return_all_layers, standardize_depth=args.standardize_depth)
             if val_stats["loss"] < min_val_loss:
@@ -672,8 +678,7 @@ def train_one_epoch(model: torch.nn.Module, tasks_loss_fn: Dict[str, torch.nn.Mo
     pred_images = None
     gt_images = None
 
-    for step, x in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
-        x = x[0]
+    for step, (x,_) in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
         # assign learning rate & weight decay for each step
         it = start_steps + step  # global training iteration
         if lr_schedule_values is not None or wd_schedule_values is not None:
@@ -686,13 +691,12 @@ def train_one_epoch(model: torch.nn.Module, tasks_loss_fn: Dict[str, torch.nn.Mo
         if 'depth_zbuffer' in x:
             x['depth'] = x['depth_zbuffer']
             del x['depth_zbuffer']
-        
+
         tasks_dict = {
             task: tensor.to(device, non_blocking=True)
             for task, tensor in x.items()
         }
-        print(tasks_dict)
-        
+
         input_dict = {
             task: tensor
             for task, tensor in tasks_dict.items()
@@ -730,12 +734,13 @@ def train_one_epoch(model: torch.nn.Module, tasks_loss_fn: Dict[str, torch.nn.Mo
             # print('=====> input_dict:', {k: v.shape for k, v in input_dict.items()})
 
             preds = model(input_dict, return_all_layers=return_all_layers)
-            task_losses =tasks_loss_fn['depth'](preds['depth' ].float(), tasks_dict['depth' ], mask_valid=None) 
-            loss = sum(task_losses.values())
+            
+            depth_pred, depth_gt  = preds['depth'], tasks_dict['depth'] 
+            loss = tasks_loss_fn(depth_pred,depth_gt)
 
         loss_value = loss.item()
-        task_loss_values = {f'{task}_loss': l.item() for task, l in task_losses.items()}
-        metrics = masked_nyu_metrics(preds['depth'], tasks_dict['depth'], mask_valid=tasks_dict['mask_valid'])
+        #task_loss_values = {f'{task}_loss': l.item() for task, l in task_losses.items()}
+        metrics = masked_nyu_metrics(preds['depth'][0], tasks_dict['depth'], mask_valid=None)
 
         if not math.isfinite(loss_value):
             print("Loss is {}, stopping training".format(loss_value))
@@ -753,7 +758,6 @@ def train_one_epoch(model: torch.nn.Module, tasks_loss_fn: Dict[str, torch.nn.Mo
         # Metrics and logging
         metric_logger.update(**metrics)
         metric_logger.update(loss=loss_value)
-        metric_logger.update(**task_loss_values)
         # metric_logger.update(loss_scale=loss_scale_value)
         min_lr = 10.
         max_lr = 0.
@@ -798,7 +802,7 @@ def train_one_epoch(model: torch.nn.Module, tasks_loss_fn: Dict[str, torch.nn.Mo
 
 
 @torch.no_grad()
-def evaluate(model, tasks_loss_fn, data_loader, device, epoch, in_domains,
+def evaluate(model, tasks_loss_fn, args,data_loader, device, epoch, in_domains,
              log_images=False, mode='val', return_all_layers=False, standardize_depth=True):
     # Switch to evaluation mode
     model.eval()
@@ -815,9 +819,7 @@ def evaluate(model, tasks_loss_fn, data_loader, device, epoch, in_domains,
     pred_images = None
     gt_images = None
 
-    for x in metric_logger.log_every(data_loader, print_freq, header):
-        x = x[0]
-
+    for (x,_) in metric_logger.log_every(data_loader, print_freq, header):
         if 'depth_zbuffer' in x:
             x['depth'] = x['depth_zbuffer']
             del x['depth_zbuffer']
@@ -862,16 +864,23 @@ def evaluate(model, tasks_loss_fn, data_loader, device, epoch, in_domains,
         # Forward + backward
         with torch.cuda.amp.autocast(enabled=False):
             preds = model(input_dict, return_all_layers=return_all_layers)
-            task_losses = {
-                task: tasks_loss_fn[task](preds[task], tasks_dict[task], mask_valid=tasks_dict['mask_valid'])
-                for task in preds
-            }
-            loss = sum(task_losses.values())
+            depth_pred, depth_gt  = preds['depth'], tasks_dict['depth'] 
+            loss = tasks_loss_fn(depth_pred,depth_gt)
 
         loss_value = loss.item()
-        task_loss_values = {f'{task}_loss': l.item() for task, l in task_losses.items()}
-        metrics = masked_nyu_metrics(preds['depth'], tasks_dict['depth'], mask_valid=tasks_dict['mask_valid'])
+        if args.output_adapter == 'convnext' :
+            metrics = masked_nyu_metrics(preds['depth'][0], tasks_dict['depth'], mask_valid=None)
 
+        elif args.output_adapter == 'vit' :
+            metrics = masked_nyu_metrics(preds['depth'][0], tasks_dict['depth'], mask_valid=None)
+
+        elif args.output_adapter == 'vpt':
+            metrics = masked_nyu_metrics(preds['depth'], tasks_dict['depth'], mask_valid=None)
+              
+        elif args.output_adapter == 'segmenter' :
+            metrics = masked_nyu_metrics(preds['depth'], tasks_dict['depth'], mask_valid=None)
+
+        # task_loss_values = {f'{task}_loss': l.item() for task, l in task_losses.items()}
         metric_logger.update(**metrics)
 
         if log_images and pred_images is None and utils.is_main_process():
@@ -881,7 +890,8 @@ def evaluate(model, tasks_loss_fn, data_loader, device, epoch, in_domains,
             gt_images.update({task: v.detach().cpu().float() for task, v in tasks_dict.items() if task not in gt_images})
 
         metric_logger.update(loss=loss_value)
-        metric_logger.update(**task_loss_values)
+        
+        # metric_logger.update(**task_loss_values)
 
     # Do before metrics so that void is not replaced
     if log_images and utils.is_main_process():
@@ -892,18 +902,19 @@ def evaluate(model, tasks_loss_fn, data_loader, device, epoch, in_domains,
     metric_logger.synchronize_between_processes()
 
     print(f'* Loss {metric_logger.loss.global_avg:.3f}')
-
+    print(metrics)
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
 
 
 if __name__ == '__main__':
     opts = get_args()
-    # if opts.tmp:
-    #     opts.output_dir = f'{opts.output_dir}-tmp'
-    # else:
-    opts.output_dir = f'{opts.output_dir}-lr={opts.lr}-adapter={opts.output_adapter}-weight_decay={opts.weight_decay}-input_size={opts.input_size}-drop_path_encoder={opts.drop_path_encoder}'
-    opts.wandb_run_name = f'{opts.wandb_run_name}-lr={opts.lr}-adapter={opts.output_adapter}-weight_decay={opts.weight_decay}'
-    # if opts.tmp:
-    #     opts.wandb_run_name = f'tmp-{opts.wandb_run_name}'
-    Path(opts.output_dir).mkdir(parents=True, exist_ok=True)
+    if opts.tmp:
+        opts.output_dir = f'{opts.output_dir}-tmp'
+    else:
+        opts.output_dir = f'{opts.output_dir}-loss={opts.loss}-lr={opts.lr}-adapter={opts.output_adapter}-weight_decay={opts.weight_decay}-input_size={opts.input_size}-drop_path_encoder={opts.drop_path_encoder}-color_augs={opts.color_augs}'
+    opts.wandb_run_name = f'{opts.wandb_run_name}-loss={opts.loss}-lr={opts.lr}-adapter={opts.output_adapter}-weight_decay={opts.weight_decay}'
+    if opts.tmp:
+        opts.wandb_run_name = f'tmp-{opts.wandb_run_name}'
+    if opts.output_dir:
+        Path(opts.output_dir).mkdir(parents=True, exist_ok=True)
     main(opts)

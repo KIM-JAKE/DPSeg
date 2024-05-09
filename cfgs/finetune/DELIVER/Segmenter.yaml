@@ -16,14 +16,14 @@ decoder_preds_per_patch: 16
 decoder_depth: 2
 
 # Train
-epochs: 100
+epochs: 300
 opt: Adamw
-lr: 0.0001 
-warmup_lr: 0.000001 
+lr: 0.00005
+warmup_lr: 0.0000005 
 min_lr: 0.
 warmup_epochs: 5
 batch_size: 2
-input_size: 640
+input_size: 1024
 layer_decay: 0.75
 weight_decay: 0.00001
 open_layer : None
@@ -32,10 +32,10 @@ open_layer : None
 aug_name: simple
 
 # Data info
-data_path: "/root/datasets/jake/root/datasets/ADE20K/train" # Change me
-eval_data_path: "/root/datasets/jake/root/datasets/ADE20K/test" # Change me
-num_classes: 150
-dataset_name: ade20k
+data_path: "/root/datasets/jake/root/datasets/NYUv2_Dataset/NYUv2/NYUv2/train" # Change me
+eval_data_path: "/root/datasets/jake/root/datasets/NYUv2_Dataset/NYUv2/NYUv2/test" # Change me
+num_classes: 25
+dataset_name: DELIVER
 dist_eval: True
 seg_reduce_zero_label: True
 eval_freq: 10
@@ -51,15 +51,15 @@ prompt_deep : True
 top_k : 5
 size : 5
 length : 5 
-task_specific_prompt_length : 200
+task_specific_prompt_length : 0
 not_self_attn : False
 use_prompt_mask : True
 
 # Wandb and logging
-log_wandb: True # Set to True to log to Weights & Biases
+log_wandb: False # Set to True to log to Weights & Biases
 wandb_project: 'MAE OURS ViT Decoder'
 wandb_entity: null # Change if needed
 wandb_run_name: 'MAE OURS ViT Decoder-ADE'
 log_images_wandb: False
 log_images_freq: 20
-output_dir: '/root/workspace/Results/MAE OURS ViT Decoder-ADE'
+output_dir: '/root/workspace/Results/MAE OURS ViT 1Decoder-ADE'

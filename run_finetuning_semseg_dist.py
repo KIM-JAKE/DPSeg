@@ -47,8 +47,8 @@ from utils.lovasz_loss import lovasz_softmax
 import utils.data_constants as data_constants
 from multimae import multimae_l2p
 from multimae.input_adapters import PatchedInputAdapter, SemSegInputAdapter, PromptPatchedInputAdapter
-from multimae.output_adapters import (ConvNeXtAdapter, DPTOutputAdapter,
-                                      SegmenterMaskTransformerAdapter)
+from multimae.output_adapters import (ConvNeXtAdapter, DPTOutputAdapter, VPTAdapter,
+                                      SegmenterMaskTransformerAdapter, ViTAdapter,)
 from utils import NativeScalerWithGradNormCount as NativeScaler
 from utils import create_model
 from utils.data_constants import COCO_SEMSEG_NUM_CLASSES
@@ -291,11 +291,11 @@ def get_args():
     parser.add_argument('--show_user_warnings', default=False, action='store_true')
 
     # Distributed training parameters
-    parser.add_argument('--world_size', default=2, type=int,
+    parser.add_argument('--world_size', default=4, type=int,
                         help='number of distributed processes')
     parser.add_argument('--local_rank', default=-1, type=int)
     parser.add_argument('--dist_on_itp', action='store_true')
-    parser.add_argument('--dist_url', default='env://115.145.20.201:3014', help='url used to set up distributed training')
+    parser.add_argument('--dist_url', default='env://', help='url used to set up distributed training')
     
     
     parser.add_argument('--freeze', default=['encoder'], nargs='*', type=list, help='freeze part in backbone model')
@@ -398,7 +398,7 @@ def main(args):
     if dataset_val is not None:
         data_loader_val = torch.utils.data.DataLoader(
             dataset_val, sampler=sampler_val,
-            batch_size=args.batch_size * 4,
+            batch_size=args.batch_size  ,
             num_workers=args.num_workers,
             pin_memory=args.pin_mem,
             drop_last=False
@@ -437,14 +437,17 @@ def main(args):
         raise NotImplementedError('Unsupported backbone: DPT head is fixed for ViT-B.')
 
     adapters_dict = {
+        'vit' :  partial(ViTAdapter, depth=args.decoder_depth, drop_path_rate=args.drop_path_decoder),
+        'vpt' : partial(VPTAdapter, preds_per_patch=args.decoder_preds_per_patch, depth=args.decoder_depth,
+                            interpolate_mode=args.decoder_interpolate_mode, main_tasks=args.decoder_main_tasks.split('-')),
         'segmenter': partial(SegmenterMaskTransformerAdapter, depth=args.decoder_depth, drop_path_rate=args.drop_path_decoder),
         'convnext': partial(ConvNeXtAdapter, preds_per_patch=args.decoder_preds_per_patch, depth=args.decoder_depth,
                             interpolate_mode=args.decoder_interpolate_mode, main_tasks=args.decoder_main_tasks.split('-')),
         'dpt': partial(DPTOutputAdapter, stride_level=1, main_tasks=args.decoder_main_tasks.split('-'), head_type='semseg'),
     }
-
+    
     output_adapters = {
-        'semseg': adapters_dict['convnext'](
+        'semseg': adapters_dict[args.output_adapter](
             num_classes=args.num_classes_with_void,
             embed_dim=args.decoder_dim, patch_size=args.patch_size, 
             prompt_deep = args.prompt_deep , prompt_shallow = args.prompt_shallow,
@@ -568,7 +571,7 @@ def main(args):
         fcl = FocalLoss(ignore_index=255)
         fc_loss = fcl(real_preds,target)
         mse = torch.nn.MSELoss()
-        target = label_to_one_hot_label(target ,25 , target.device)
+        target = label_to_one_hot_label(target , args.num_classes , target.device)
         mse_loss = mse(real_preds, target)
         loss_prompt_seg = mse(prompt_seg,target)
         
@@ -578,9 +581,17 @@ def main(args):
         return loss
     
     # criterion = FocalLoss(alpha = alpha.to('cuda:0'))
-    criterion = custom_loss
-    # criterion = torch.nn.CrossEntropyLoss(ignore_index=255)
+    if args.output_adapter == 'convnext' :
+        criterion = custom_loss
+    elif args.output_adapter == 'vit' :
+        criterion = custom_loss
+    elif args.output_adapter == 'vpt':
+        criterion = torch.nn.CrossEntropyLoss(ignore_index=255)                
+    elif args.output_adapter == 'segmenter' :
+        criterion = torch.nn.CrossEntropyLoss(ignore_index=255)
+        
     print("criterion = %s" % str(criterion))
+    print("Output Adapter: ", args.output_adapter)
 
     # Specifies if transformer encoder should only return last layer or all layers for DPT
     return_all_layers = args.output_adapter in ['dpt']
@@ -631,7 +642,7 @@ def main(args):
 
         if data_loader_val is not None and (epoch % args.eval_freq == 0 or epoch == args.epochs - 1):
             log_images = args.log_wandb and args.log_images_wandb and (epoch % args.log_images_freq == 0)
-            val_stats = evaluate(model=model, criterion=criterion, data_loader=data_loader_val,
+            val_stats = evaluate(model=model, args=args,criterion=criterion, data_loader=data_loader_val,
                                  device=device, epoch=epoch, in_domains=args.in_domains,
                                  num_classes=args.num_classes, log_images=log_images, 
                                  dataset_name=args.dataset_name, mode='val', fp16=args.fp16,
@@ -781,7 +792,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, data_loa
 
 
 @torch.no_grad()
-def evaluate(model, criterion, data_loader, device, epoch, in_domains, num_classes, dataset_name,
+def evaluate(model, criterion, data_loader, device, epoch, args,in_domains, num_classes, dataset_name,
              log_images=False, mode='val', fp16=True, return_all_layers=False):
     # Switch to evaluation mode
     model.eval()
@@ -829,29 +840,46 @@ def evaluate(model, criterion, data_loader, device, epoch, in_domains, num_class
             seg_pred, seg_gt  = preds['semseg'], tasks_dict['semseg'] 
             loss = criterion(seg_pred, seg_gt)
 
-        # output_dir = "/root/datasets/t-sne"
         # prompts = seg_pred[2].detach().cpu()
-        # prompts = prompts.squeeze(0).numpy()
+        # attention_mean = prompts.mean(dim=1)
 
-        # # Perform t-SNE
-        # tsne = TSNE(n_components=2, perplexity=5,learning_rate=200, n_iter=1000,random_state=42)
-        # prompts_tsne = tsne.fit_transform(prompts)
+        # # t-SNE 적용
+        # tsne = TSNE(n_components=2, perplexity=30, learning_rate=200, n_iter=1000, random_state=42)
+        # attention_tsne = tsne.fit_transform(attention_mean.squeeze(0))
 
-        # # Create a plot
+        # # KMeans 클러스터링을 적용하여 데이터 포인트 그룹화
+        # kmeans = KMeans(n_clusters=7, random_state=42)
+        # clusters = kmeans.fit_predict(attention_tsne)
+
+        # # 클러스터별 색상을 정의
+        # cluster_colors = plt.cm.get_cmap("viridis", 7)  # 5개 클러스터를 위한 색상 맵
+
+        # # 플롯 생성
         # plt.figure(figsize=(10, 6))
-        # plt.scatter(prompts_tsne[:, 0], prompts_tsne[:, 1])
-        # plt.title('t-SNE Visualization of Last Layer Prompts')
+        # for idx, point in enumerate(attention_tsne):
+        #     plt.scatter(point[0], point[1], color=cluster_colors(clusters[idx]), s=10)  # 각 포인트에 클러스터별 색상 적용
+
+        # plt.title('t-SNE Visualization of Attention Scores')
         # plt.xlabel('Component 1')
         # plt.ylabel('Component 2')
 
-        # # Save the plot with a unique name
+        # # 플롯 저장
+        # output_dir = "/root/workspace/t-sne-grad-ade"
         # timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        # filename = f"{output_dir}/t_sne_plot_{timestamp}.png"
+        # filename = f"{output_dir}/attention_tsne_plot_{timestamp}.png"
         # plt.savefig(filename)
         
         loss_value = loss.item()
         # If there is void, exclude it from the preds and take second highest class
-        seg_pred_argmax = seg_pred[0][:, :num_classes].argmax(dim=1)
+        if args.output_adapter == 'convnext' :
+            seg_pred_argmax = seg_pred[0][:, :num_classes].argmax(dim=1)
+        elif args.output_adapter == 'vit' :
+            seg_pred_argmax = seg_pred[0][:, :num_classes].argmax(dim=1)
+        elif args.output_adapter == 'vpt':
+            seg_pred_argmax = seg_pred[:, :num_classes].argmax(dim=1)               
+        elif args.output_adapter == 'segmenter' :
+            seg_pred_argmax = seg_pred[:, :num_classes].argmax(dim=1)
+
         seg_preds.extend(list(seg_pred_argmax.cpu().numpy()))
         seg_gts.extend(list(seg_gt.cpu().numpy()))
         # attn_heat_map = seg_pred[2].mean(dim=1)
@@ -882,7 +910,6 @@ def evaluate(model, criterion, data_loader, device, epoch, in_domains, num_class
           f'Acc {metric_logger.mean_accuracy.global_avg:.3f} Loss {metric_logger.loss.global_avg:.3f}')
     
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
-
 from datetime import datetime
 
 def upsample_attention(attn_map, patch_size=16, img_dim=576):

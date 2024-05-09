@@ -581,7 +581,7 @@ class MultiViT(MultiMAE):
         # original_prompts = torch.cat([expanded_prompts_1, expanded_prompts_2], dim=1)
 
         input_tokens = torch.cat([expanded_prompts_1 ,global_tokens,  input_tokens ], dim = 1)
-        want_size = input_tokens.shape[1]
+        # want_size = input_tokens.shape[1]
         # original_tokens = input_tokens
         
         if self.prompt_deep:
@@ -592,7 +592,8 @@ class MultiViT(MultiMAE):
                         input_tokens = input_tokens[:,self.task_specific_prompt_length:,:]
                         prompt = self.prompt_dropout(prompt) # B prompt_length 768
                         input_tokens = torch.cat([ prompt , input_tokens ] , dim = 1)
-                        input_tokens  = layer(input_tokens)  
+                        input_tokens = layer(input_tokens)  
+
                 #         if i == 5 :
                 #             save_prompt = prompt
                 # input_tokens = layer(input_tokens)
@@ -605,7 +606,7 @@ class MultiViT(MultiMAE):
             
             encoder_tokens =  torch.cat([expanded_prompts_1, input_tokens] , dim = 1 )
             # encoder_tokens =  input_tokens
-            
+        
         # Decode tokens for each task using task-specific output adapters
         preds = {
             domain: self.output_adapters[domain](
