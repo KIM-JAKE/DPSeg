@@ -1,5 +1,5 @@
 # Finetune from:
-finetune:  "/root/datasets/mae-b_dec512d8b_1600e_multivit-c477195b.pth" # Change me
+finetune:  "/root/datasets/jake/mae-b_dec512d8b_1600e_multivit-c477195b.pth" # Change me
 
 # Input tasks
 in_domains: rgb
@@ -16,10 +16,10 @@ decoder_preds_per_patch: 16
 decoder_depth: 2
 
 # Train
-epochs: 100
+epochs: 300
 opt: Adamw
-lr: 0.0001 
-warmup_lr: 0.000001 
+lr: 0.0001
+warmup_lr: 0.000001
 min_lr: 0.
 warmup_epochs: 5
 batch_size: 2
@@ -32,10 +32,10 @@ open_layer : None
 aug_name: simple
 
 # Data info
-data_path: "/root/datasets/jake/root/datasets/ADE20K/train" # Change me
-eval_data_path: "/root/datasets/jake/root/datasets/ADE20K/test" # Change me
+data_path: "/root/datasets/jake/ADE20K/train" # Change me
+eval_data_path: "/root/datasets/jake/ADE20K/test" # Change me
 num_classes: 150
-dataset_name: ade20k
+dataset_name: sun
 dist_eval: True
 seg_reduce_zero_label: True
 eval_freq: 10
@@ -51,15 +51,15 @@ prompt_deep : True
 top_k : 5
 size : 5
 length : 5 
-task_specific_prompt_length : 200
+task_specific_prompt_length : 0
 not_self_attn : False
 use_prompt_mask : True
 
 # Wandb and logging
 log_wandb: True # Set to True to log to Weights & Biases
-wandb_project: 'MAE OURS ViT Decoder'
+wandb_project: 'MAE Segmenter ADE20K'
 wandb_entity: null # Change if needed
-wandb_run_name: 'MAE OURS ViT Decoder-ADE'
+wandb_run_name: 'MAE Segmenter ADE20K'
 log_images_wandb: False
 log_images_freq: 20
-output_dir: '/root/workspace/Results/MAE OURS ViT Decoder-ADE'
+output_dir: '/root/workspace/Results/MAE Segmenter ADE20K'

@@ -1,9 +1,9 @@
 # NYU depth config
 
 # Finetune from:
-#finetune: '/root/datasets/jake/multimae-b_98_rgb+-depth-semseg_1600e_multivit-afff3f8c (1).pth' # Change me
-# finetune: '/root/datasets/jake/mae-b_dec512d8b_1600e_multivit-c477195b.pth'
-finetune: '/root/datasets/jake/DINO-base16.pth'
+# finetune: '/root/datasets/jake/multimae-b_98_rgb+-depth-semseg_1600e_multivit-afff3f8c (1).pth' # Change me
+finetune: '/root/datasets/jake/mae-b_dec512d8b_1600e_multivit-c477195b.pth'
+# finetune: '/root/datasets/jake/DINO-base16.pth'
 # finetune: '/root/datasets/jake/deit_distill.pth'
 
 # Input tasks
@@ -15,20 +15,20 @@ model: multivit_base
 patch_size: 16
 num_global_tokens: 1
 drop_path_encoder: 0.0
-output_adapter: convnext
+output_adapter: vpt
 decoder_dim: 6144
 decoder_preds_per_patch: 64
 decoder_depth: 4
 
 # Train
 loss: berhu
-epochs: 2000
+epochs: 
 opt: adamw
-lr: 0.000025 # = 1e-4
+lr: 0.00005 # = 1e-4
 warmup_lr: 0.00000025 # = 1e-6
 min_lr: 0.
 warmup_epochs: 100
-batch_size: 16
+batch_size: 32
 input_size: 256
 layer_decay: 0.75
 weight_decay: 0.00001 # 1e-4
@@ -44,13 +44,13 @@ prompt_deep : True
 top_k : 5
 size : 5
 length : 5 
-task_specific_prompt_length : 32
+task_specific_prompt_length : 0
 not_self_attn : False
 use_prompt_mask : True
 
 # Data info
-data_path: '/root/datasets/jake/NYUv2_Dataset/NYUv2/NYUv2/train' # Change me
-eval_data_path: '/root/datasets/jake/NYUv2_Dataset/NYUv2/NYUv2/test' # Change me
+data_path: '/root/datasets/jake/srgbd/train' # Change me
+eval_data_path: '/root/datasets/jake/srgbd/test' # Change me
 color_augs: True
 dataset_name: nyu
 dist_eval: True
@@ -61,10 +61,11 @@ standardize_depth: False
 find_unused_params: True
 
 # Wandb and logging
+# Wandb and logging
 log_wandb: True # Set to True to log to Weights & Biases
-wandb_project: 'DINO Depth'
+wandb_project: 'MAE SUN Depth'
 wandb_entity: null # Change if needed
-wandb_run_name: 'DINO_NYU_depth_pl=32'
+wandb_run_name: 'MAE_SUN_DEPTH_BASE'
 log_images_wandb: False
 log_images_freq: 250
-output_dir: '/root/workspace/Results/DINO_NYU_depth_pl=32' # Change if needed
+output_dir: '/root/workspace/Results/MAE_SUN_DEPTH_BASE' # Change if needed

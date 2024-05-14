@@ -179,7 +179,7 @@ class Attention(nn.Module):
         # 어텐션 가중치 계산 및 적용        
         attn = attn.softmax(dim=-1)
         attn = self.attn_drop(attn)
-
+        
         x = (attn @ v).transpose(1, 2).reshape(B, N, C)
         x = self.proj(x)
         x = self.proj_drop(x)

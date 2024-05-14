@@ -42,8 +42,7 @@ import torch.nn.functional as F
 import yaml
 
 from utils.focal_loss import FocalLoss, label_to_one_hot_label
-import utils
-from utils.lovasz_loss import lovasz_softmax 
+import utils 
 import utils.data_constants as data_constants
 from multimae import multimae_l2p
 from multimae.input_adapters import PatchedInputAdapter, SemSegInputAdapter, PromptPatchedInputAdapter
@@ -59,7 +58,6 @@ from utils.optim_factory import LayerDecayValueAssigner, create_optimizer
 from utils.pos_embed import interpolate_pos_embed_multimae
 from utils.semseg_metrics import mean_iou
 from utils.copy_paste import CopyPaste
-from utils.lovasz_loss import lovasz_softmax
 
 class SubsetDataset(torch.utils.data.Dataset):
     """데이터셋의 부분집합만을 반환하는 클래스"""
@@ -840,8 +838,8 @@ def evaluate(model, criterion, data_loader, device, epoch, args,in_domains, num_
             seg_pred, seg_gt  = preds['semseg'], tasks_dict['semseg'] 
             loss = criterion(seg_pred, seg_gt)
 
-        # prompts = seg_pred[2].detach().cpu()
-        # attention_mean = prompts.mean(dim=1)
+        # prompts = seg_pred[2].detach().cpu() # B 12 200 1600 
+        # attention_mean = prompts.mean(dim=1) # B 200 1600
 
         # # t-SNE 적용
         # tsne = TSNE(n_components=2, perplexity=30, learning_rate=200, n_iter=1000, random_state=42)
@@ -882,7 +880,7 @@ def evaluate(model, criterion, data_loader, device, epoch, args,in_domains, num_
 
         seg_preds.extend(list(seg_pred_argmax.cpu().numpy()))
         seg_gts.extend(list(seg_gt.cpu().numpy()))
-        # attn_heat_map = seg_pred[2].mean(dim=1)
+        # attn_heat_map = seg_pred[2].mean(dim=1) # B 12 200 1600
         # save_attention_maps(attn_heat_map)
         if log_images:
             rgb_gts.extend(tasks_dict['rgb'].cpu().unbind(0))

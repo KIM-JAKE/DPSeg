@@ -559,9 +559,8 @@ def main(args):
         mse_loss = mse(real_preds, target)
         loss_prompt_seg = mse(prompt_seg,target)
         
-        loss = (fc_loss * 20 + mse_loss) + (150* loss_prompt_seg) 
+        loss = (fc_loss * 20 +  mse_loss) + ( 150 *loss_prompt_seg) 
         # loss = loss_prompt_seg
-        
         return loss
     
     # criterion = FocalLoss(alpha = alpha.to('cuda:0'))

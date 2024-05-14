@@ -591,8 +591,8 @@ class MultiViT(MultiMAE):
                         prompt = input_tokens[:,: self.task_specific_prompt_length,:]
                         input_tokens = input_tokens[:,self.task_specific_prompt_length:,:]
                         prompt = self.prompt_dropout(prompt) # B prompt_length 768
-                        input_tokens = torch.cat([ prompt , input_tokens ] , dim = 1)
-                        input_tokens = layer(input_tokens)  
+                        input_tokens = torch.cat([ prompt , input_tokens ] , dim = 1) 
+                        input_tokens  = layer(input_tokens)  
 
                 #         if i == 5 :
                 #             save_prompt = prompt
