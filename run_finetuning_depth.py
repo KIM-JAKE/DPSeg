@@ -240,7 +240,7 @@ def get_args():
     parser.add_argument('--max_val_images', default=100, type=int, help='number of validation images')
     parser.add_argument('--max_test_images', default=100, type=int, help='number of test images')
 
-    parser.add_argument('--output_dir', default='',
+    parser.add_argument('--output_dir', default=None,
                         help='path where to save, empty for no saving')
     parser.add_argument('--device', default='cuda',
                         help='device to use for training / testing')
@@ -576,7 +576,6 @@ def main(args):
     print("criterion = %s" % str(tasks_loss_fn))
     print("Output Adapter: ", args.output_adapter)
     
-    
     # Specifies if transformer encoder should only return last layer or all layers for DPT
     return_all_layers = args.output_adapter in ['dpt']
 
@@ -655,6 +654,7 @@ def main(args):
     # Test with best checkpoint
     print('Loading model with best validation loss')
     checkpoint = torch.load(os.path.join(args.output_dir, 'checkpoint-best.pth'), map_location='cpu')
+    
     state_dict = {}
     for k,v in checkpoint['model'].items():
         state_dict[f'module.{k}'] = v
@@ -884,7 +884,7 @@ def evaluate(model, tasks_loss_fn, args,data_loader, device, epoch, in_domains,
 
         if log_images and pred_images is None and utils.is_main_process():
             # Just log images of first batch
-            pred_images = {task: v.detach().cpu().float() for task, v in preds.items()}
+            pred_images = {task: v[0].detach().cpu().float() for task, v in preds.items()}
             gt_images = {task: v.detach().cpu().float() for task, v in input_dict.items()}
             gt_images.update({task: v.detach().cpu().float() for task, v in tasks_dict.items() if task not in gt_images})
 
@@ -910,7 +910,7 @@ if __name__ == '__main__':
     if opts.tmp:
         opts.output_dir = f'{opts.output_dir}-tmp'
     else:
-        opts.output_dir = f'{opts.output_dir}-loss={opts.loss}-lr={opts.lr}-adapter={opts.output_adapter}-weight_decay={opts.weight_decay}-input_size={opts.input_size}-drop_path_encoder={opts.drop_path_encoder}-color_augs={opts.color_augs}'
+        opts.output_dir = f'{opts.output_dir}'
     opts.wandb_run_name = f'{opts.wandb_run_name}-loss={opts.loss}-lr={opts.lr}-adapter={opts.output_adapter}-weight_decay={opts.weight_decay}'
     if opts.tmp:
         opts.wandb_run_name = f'tmp-{opts.wandb_run_name}'

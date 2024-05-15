@@ -23,7 +23,7 @@ import warnings
 from functools import partial
 from pathlib import Path
 from typing import Dict, Iterable
-
+from sklearn.cluster import KMeans
 import matplotlib.pyplot as plt
 from sklearn.manifold import TSNE
 import numpy as np
@@ -31,7 +31,6 @@ import os
 from datetime import datetime
 
 import matplotlib.pyplot as plt
-
 import numpy as np
 import torch
 import torch.backends.cudnn as cudnn
@@ -41,12 +40,11 @@ import yaml
 
 from utils.focal_loss import FocalLoss, label_to_one_hot_label
 import utils
-from utils.lovasz_loss import lovasz_softmax 
 import utils.data_constants as data_constants
 from multimae import multimae_l2p
 from multimae.input_adapters import PatchedInputAdapter, SemSegInputAdapter, PromptPatchedInputAdapter
 from multimae.output_adapters import (ConvNeXtAdapter, DPTOutputAdapter,
-                                      SegmenterMaskTransformerAdapter)
+                                      SegmenterMaskTransformerAdapter,MaskFormer)
 from utils import NativeScalerWithGradNormCount as NativeScaler
 from utils import create_model
 from utils.data_constants import COCO_SEMSEG_NUM_CLASSES
@@ -57,7 +55,6 @@ from utils.optim_factory import LayerDecayValueAssigner, create_optimizer
 from utils.pos_embed import interpolate_pos_embed_multimae
 from utils.semseg_metrics import mean_iou
 from utils.copy_paste import CopyPaste
-from utils.lovasz_loss import lovasz_softmax
 
 DOMAIN_CONF = {
     'rgb': {
@@ -360,7 +357,7 @@ def main(args):
     if dataset_val is not None:
         data_loader_val = torch.utils.data.DataLoader(
             dataset_val, sampler=sampler_val,
-            batch_size=args.batch_size * 2,
+            batch_size=args.batch_size ,
             num_workers=args.num_workers,
             pin_memory=args.pin_mem,
             drop_last=False
@@ -403,10 +400,12 @@ def main(args):
         'convnext': partial(ConvNeXtAdapter, preds_per_patch=args.decoder_preds_per_patch, depth=args.decoder_depth,
                             interpolate_mode=args.decoder_interpolate_mode, main_tasks=args.decoder_main_tasks.split('-')),
         'dpt': partial(DPTOutputAdapter, stride_level=1, main_tasks=args.decoder_main_tasks.split('-'), head_type='semseg'),
+        'maskformer' :partial(MaskFormer, preds_per_patch=args.decoder_preds_per_patch, depth=args.decoder_depth,
+                            interpolate_mode=args.decoder_interpolate_mode, main_tasks=args.decoder_main_tasks.split('-')),
     }
 
     output_adapters = {
-        'semseg': adapters_dict['convnext'](
+        'semseg': adapters_dict['segmenter'](
             num_classes=args.num_classes_with_void,
             embed_dim=args.decoder_dim, patch_size=args.patch_size, 
             prompt_deep = args.prompt_deep , prompt_shallow = args.prompt_shallow,
@@ -523,7 +522,7 @@ def main(args):
     print("Max WD = %.7f, Min WD = %.7f" % (max(wd_schedule_values), min(wd_schedule_values)))
 
     def custom_loss(preds,target) :
-        real_preds, prompt_seg = preds
+        real_preds, prompt_seg, _ = preds
         fcl = FocalLoss(ignore_index=255)
         fc_loss = fcl(real_preds,target)
         mse = torch.nn.MSELoss()
@@ -537,8 +536,8 @@ def main(args):
         return loss
     
     # criterion = FocalLoss(alpha = alpha.to('cuda:0'))
-    criterion = custom_loss
-    # criterion = torch.nn.CrossEntropyLoss(ignore_index=255)
+    # criterion = custom_loss
+    criterion = torch.nn.CrossEntropyLoss(ignore_index=255)
     print("criterion = %s" % str(criterion))
 
     # Specifies if transformer encoder should only return last layer or all layers for DPT
@@ -739,7 +738,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, data_loa
 
 @torch.no_grad()
 def evaluate(model, criterion, data_loader, device, epoch, in_domains, num_classes, dataset_name,
-             log_images=False, mode='val', fp16=True, return_all_layers=False):
+             log_images=True, mode='val', fp16=True, return_all_layers=False):
     # Switch to evaluation mode
     model.eval()
 
@@ -786,38 +785,32 @@ def evaluate(model, criterion, data_loader, device, epoch, in_domains, num_class
             seg_pred, seg_gt  = preds['semseg'], tasks_dict['semseg'] 
             loss = criterion(seg_pred, seg_gt)
 
-        prompts = seg_pred[2].detach().cpu()
-        attention_mean = prompts.mean(dim=1)
+        # prompts = seg_pred[2].detach().cpu()
+        # print(prompts.shape)
+        # attention_mean = prompts.mean(dim=1)
 
-        # t-SNE 적용
-        tsne = TSNE(n_components=2, perplexity=30, learning_rate=200, n_iter=1000, random_state=42)
-        attention_tsne = tsne.fit_transform(attention_mean.squeeze(0))
+        # tsne = TSNE(n_components=2, perplexity=10, learning_rate=200, n_iter=1000, random_state=42)
+        # attention_mean = prompts.mean(dim=1)  # 평균 계산
+        # attention_tsne = tsne.fit_transform(attention_mean.squeeze(0))
 
-        # KMeans 클러스터링을 적용하여 데이터 포인트 그룹화
-        kmeans = KMeans(n_clusters=7, random_state=42)
-        clusters = kmeans.fit_predict(attention_tsne)
+        # # 플롯 생성
+        # plt.figure(figsize=(10, 6))
+        # plt.scatter(attention_tsne[:, 0], attention_tsne[:, 1], color='blue', s=10)  # 모든 포인트를 동일한 색상으로 표시
 
-        # 클러스터별 색상을 정의
-        cluster_colors = plt.cm.get_cmap("viridis", 7)  # 5개 클러스터를 위한 색상 맵
+        # plt.title('t-SNE Visualization of Attention Scores')
+        # plt.xlabel('Component 1')
+        # plt.ylabel('Component 2')
 
-        # 플롯 생성
-        plt.figure(figsize=(10, 6))
-        for idx, point in enumerate(attention_tsne):
-            plt.scatter(point[0], point[1], color=cluster_colors(clusters[idx]), s=10)  # 각 포인트에 클러스터별 색상 적용
-
-        plt.title('t-SNE Visualization of Attention Scores')
-        plt.xlabel('Component 1')
-        plt.ylabel('Component 2')
-
-        # 플롯 저장
-        output_dir = "/root/workspace/t-sne-grad-ade"
-        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        filename = f"{output_dir}/attention_tsne_plot_{timestamp}.png"
-        plt.savefig(filename)
+        # # 플롯 저장
+        # output_dir = "/root/workspace/t-sne/t-sne-layer=1"
+        # os.makedirs(output_dir, exist_ok=True)    
+        # timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        # filename = f"{output_dir}/attention_tsne_plot_{timestamp}.png"
+        # plt.savefig(filename)
         
         loss_value = loss.item()
         # If there is void, exclude it from the preds and take second highest class
-        seg_pred_argmax = seg_pred[0][:, :num_classes].argmax(dim=1)
+        seg_pred_argmax = seg_pred[:, :num_classes].argmax(dim=1)
         seg_preds.extend(list(seg_pred_argmax.cpu().numpy()))
         seg_gts.extend(list(seg_gt.cpu().numpy()))
         # attn_heat_map = seg_pred[2].mean(dim=1)
@@ -832,6 +825,7 @@ def evaluate(model, criterion, data_loader, device, epoch, in_domains, num_class
 
     # Do before metrics so that void is not replaced
     if log_images and utils.is_main_process():
+        print("Log IMAGES!!!")
         prefix = 'val/img' if mode == 'val' else 'test/img'
         log_semseg_wandb(rgb_gts, seg_preds_with_void, seg_gts, depth_gts=depth_gts,dataset_name=dataset_name, prefix=prefix)
 
@@ -874,15 +868,15 @@ def save_average_attention_maps(attn_weights, output_dir="/root/workspace/attn_m
     attn_weights_mean = attn_weights_mean.mean(axis=1)  # 프롬프트에 대한 평균
 
     for batch_idx in range(attn_weights_mean.shape[0]):
-        attn_map = attn_weights_mean[batch_idx].reshape(36, 36)
+        attn_map = attn_weights_mean[batch_idx].reshape(40, 40)
         upsampled_attn_map = upsample_attention(attn_map, patch_size, img_dim)
         
         # 파일 이름에 현재 시간의 타임스탬프를 포함시킵니다.
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S%f")
         filename = f"{output_dir}/attention_map_{timestamp}.png"
-        plt.imsave(filename, upsampled_attn_map, cmap='hot')
+        plt.imsave(filename, upsampled_attn_map, cmap= 'viridis')
 
-def save_attention_maps(attn_weights, output_dir="/root/workspace/attn_map_per_prompt", patch_size=16, img_dim=576):
+def save_attention_maps(attn_weights, output_dir="/root/workspace/attn/attn_map_per_prompt_layer=1", patch_size=16, img_dim=640):
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
     
@@ -891,11 +885,11 @@ def save_attention_maps(attn_weights, output_dir="/root/workspace/attn_map_per_p
     
     for batch_idx in range(batch_size):
         for prompt_idx in range(prompt_size):
-            attn_map = attn_weights[batch_idx, prompt_idx, :].reshape(36, 36)
+            attn_map = attn_weights[batch_idx, prompt_idx, :].reshape(40, 40)
             upsampled_attn_map = upsample_attention(attn_map, patch_size, img_dim)
             
             filename = f"{output_dir}/{timestamp}_prompt_{prompt_idx}.png"
-            plt.imsave(filename, upsampled_attn_map, cmap='hot')
+            plt.imsave(filename, upsampled_attn_map, cmap='viridis')
             
 def compute_metrics_distributed(seg_preds, seg_gts, size, num_classes, device, ignore_index=utils.SEG_IGNORE_INDEX, dist_on='cpu'):
 

@@ -1,8 +1,8 @@
 # Finetune from:
-finetune:  "/root/datasets/jake/mae-b_dec512d8b_1600e_multivit-c477195b.pth" # Change me
+finetune:  '/root/datasets/jake/multimae-b_98_rgb+-depth-semseg_1600e_multivit-afff3f8c (1).pth' # Change me
 
 # Input tasks
-in_domains: rgb
+in_domains: rgb-depth
 seed : 0
 
 # Architecture
@@ -18,11 +18,11 @@ decoder_depth: 2
 # Train
 epochs: 300
 opt: Adamw
-lr: 0.0001
-warmup_lr: 0.000001
+lr: 0.00002
+warmup_lr: 0.0000002
 min_lr: 0.
-warmup_epochs: 5
-batch_size: 2
+warmup_epochs: 1
+batch_size: 1
 input_size: 640
 layer_decay: 0.75
 weight_decay: 0.00001
@@ -32,11 +32,11 @@ open_layer : None
 aug_name: simple
 
 # Data info
-data_path: "/root/datasets/jake/ADE20K/train" # Change me
-eval_data_path: "/root/datasets/jake/ADE20K/test" # Change me
-num_classes: 150
-dataset_name: sun
-dist_eval: True
+data_path: '/root/datasets/jake/NYUv2_Dataset/NYUv2/NYUv2/train' # Change me
+eval_data_path: '/root/datasets/jake/NYUv2_Dataset/NYUv2/NYUv2/test' # Change me
+num_classes: 40
+dataset_name: nyu   
+dist_eval: False
 seg_reduce_zero_label: True
 eval_freq: 10
 
@@ -57,9 +57,9 @@ use_prompt_mask : True
 
 # Wandb and logging
 log_wandb: True # Set to True to log to Weights & Biases
-wandb_project: 'MAE Segmenter ADE20K'
+wandb_project: 'Segmenter MultiMAE NYU'
 wandb_entity: null # Change if needed
-wandb_run_name: 'MAE Segmenter ADE20K'
-log_images_wandb: False
-log_images_freq: 20
-output_dir: '/root/workspace/Results/MAE Segmenter ADE20K'
+wandb_run_name: 'Segmenter MultiMAE NYU'
+log_images_wandb: True
+log_images_freq: 100
+output_dir: '/root/workspace/jake/Results/Segmenter MultiMAE NYU'

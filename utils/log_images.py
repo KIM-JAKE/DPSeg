@@ -14,7 +14,7 @@ import wandb
 
 import utils
 from utils.datasets_semseg import (ade_classes, hypersim_classes,
-                                   nyu_v2_40_classes)
+                                   nyu_v2_40_classes,sun_rgbd_classes)
 
 
 def inv_norm(tensor: torch.Tensor) -> torch.Tensor:
@@ -44,6 +44,8 @@ def log_semseg_wandb(
         classes = hypersim_classes()
     elif dataset_name == 'nyu':
         classes = nyu_v2_40_classes()
+    elif dataset_name == 'sun' :
+        classes = sun_rgbd_classes()
     else:
         raise ValueError(f'Dataset {dataset_name} not supported for logging to wandb.')
 
@@ -62,6 +64,8 @@ def log_semseg_wandb(
 
     for i, (image, pred, gt) in enumerate(zip(images, preds, gts)):
         image = inv_norm(image)
+        print(pred.shape)
+        print(gt.shape)
         pred[gt == utils.SEG_IGNORE_INDEX] = utils.SEG_IGNORE_INDEX
 
         semseg_image = wandb.Image(image, masks={

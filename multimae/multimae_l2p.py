@@ -107,6 +107,16 @@ class MultiMAE(nn.Module):
         self.task_specific_prompts_1 = nn.Parameter(torch.rand(1, self.task_specific_prompt_length, self.dim_tokens))
         self.task_specific_prompts_1 = nn.init.kaiming_normal_(self.task_specific_prompts_1)
 
+        # self.ca = CrossAttention(dim=768)
+        # self.lin = nn.Linear(768,768)
+        # self.ca2 = CrossAttention(dim=768)
+        # self.lin2 = nn.Linear(768,768)
+        # self.mlp_2 = Mlp(in_features= 768 , hidden_features= 4* 768 , out_features= 768 , drop = 0.0 )
+        # self.norm_first = nn.LayerNorm(768)
+        # self.norm = nn.LayerNorm(768)
+        # self.norm2 = nn.LayerNorm(768)
+        # self.norm3 = nn.LayerNorm(768)
+        
         # self.task_specific_prompts_2 = nn.Parameter(torch.rand(1, self.task_specific_prompt_length, self.dim_tokens))
         # self.task_specific_prompts_2 = nn.init.kaiming_normal_(self.task_specific_prompts_1)
         # For fusion
@@ -592,7 +602,7 @@ class MultiViT(MultiMAE):
                         input_tokens = input_tokens[:,self.task_specific_prompt_length:,:]
                         prompt = self.prompt_dropout(prompt) # B prompt_length 768
                         input_tokens = torch.cat([ prompt , input_tokens ] , dim = 1) 
-                        input_tokens  = layer(input_tokens)  
+                        input_tokens = layer(input_tokens)
 
                 #         if i == 5 :
                 #             save_prompt = prompt
@@ -603,7 +613,7 @@ class MultiViT(MultiMAE):
 
             # input_tokens = input_tokens[:,self.task_specific_prompt_length:,:] 
             # input_tokens = torch.cat([ prompt , input_tokens] , dim = 1 )  
-            
+        
             encoder_tokens =  torch.cat([expanded_prompts_1, input_tokens] , dim = 1 )
             # encoder_tokens =  input_tokens
         

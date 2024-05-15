@@ -321,3 +321,10 @@ def nyu_v2_40_classes():
         'box', 'white-board', 'person', 'night-stand', 'toilet', 'sink', 'lamp',
         'bathtub', 'bag', 'other-struct', 'other-furntr', 'other-prop'
     ]
+
+def sun_rgbd_classes() :
+    return ['wall', 'floor', 'cabinet', 'bed', 'chair', 'sofa', 'table', 'door',
+            'window', 'bookshelf', 'picture', 'counter', 'blinds'
+            , 'desk', 'shelves', 'curtain', 'dresser', 'pillow', 'mirror', 'floor_mat',
+            'clothes', 'ceiling', 'books', 'fridge', 'tv', 'paper', 'towel', 'shower_curtain', 
+            'box', 'whiteboard', 'person', 'night_stand', 'toilet', 'sink', 'lamp', 'bathtub', 'bag']

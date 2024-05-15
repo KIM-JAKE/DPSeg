@@ -394,7 +394,7 @@ class SegmenterMaskTransformerAdapter(nn.Module):
         self.main_tasks = main_tasks
         self.patch_size = patch_size
         self.embed_dim = embed_dim
-        self.num_classes = 150
+        self.num_classes = 40
 
         self.cls_emb = nn.Parameter(torch.zeros(1, num_classes, embed_dim))
         trunc_normal_(self.cls_emb, std=0.02)
@@ -446,8 +446,9 @@ class SegmenterMaskTransformerAdapter(nn.Module):
         N_H, N_W = H // self.patch_size, W // self.patch_size
 
         x = self.adapt_tokens(encoder_tokens, input_info)
-        x = x[:,1:,:] 
-        # x = x[:,1 + N_H*N_W:,:] #IF RGB-D
+        # x = x[:,1:,:] 
+        x = x[:,1 + N_H*N_W:,:] #IF RGB-D
+        
         x = self.proj_dec(x)
         cls_emb = self.cls_emb.expand(x.shape[0], -1, -1)
         x = torch.cat((x, cls_emb), 1)
@@ -561,7 +562,7 @@ class ViTAdapter(nn.Module):
         x = x[:,self.task_specific_prompt_length:,:]
         origin_x = x    
         x = self.proj_dec(x)   
-        x = x[:,1+  self.task_specific_prompt_length :,:] #RGB만 남겨놓고
+        x = x[:,1+  self.task_specific_prompt_length +N_W:,:] #RGB만 남겨놓고
        
     #   # pseudo semseg
         p_to_im =  (self.ca_1(origin_x[:,1+  self.task_specific_prompt_length  :,:] ,origin_prompts_1)) # B image 768
@@ -691,159 +692,6 @@ class LearnableMasking(nn.Module):
         mask = torch.sigmoid(self.mask)
         # 마스크 적용
         return x * mask
-             
-class ConvNeXtAdapter(nn.Module):
-    """Output adapter with ConvNext blocks for semantic segmentation
-
-    :param num_classes: Number of classes
-    :param num_heads: Number of attention heads
-    :param embed_dim: Token dimension after projection, and before reshaping operation.
-    :param preds_per_patch: Increases size of feature map by reshaping each patch  Each patch gets reshaped
-        from embed_dim x 1 x 1 to (embed_dim / preds_per_patch) x (preds_per_patch ** 0.5) x (preds_per_patch ** 0.5)
-    :param main_tasks: Tasks to use for the adapter. Only tokens coming from these tasks are kept.
-    :param patch_size: Size of patches
-    :param depth: Number of ConvNeXt blocks
-    :interpolate_mode: Interpolation mode for final upsampling
-    """
-
-    def __init__(
-            self,
-            num_classes,
-            prompt_pool : bool , 
-            prompt_deep : bool , 
-            not_self_attn : bool, 
-            task_specific_prompt_length : int, 
-            top_k : int ,
-            prompt_length :int ,
-            embed_dim: int = 6144,
-            preds_per_patch: int = 16,
-            main_tasks: Iterable[str] = ('rgb',),
-            patch_size: int = 16,
-            depth: int = 4,
-            dim_tokens_enc : int = 768,
-            interpolate_mode: str = 'bilinear',
-            **kwargs,
-    ):
-        super().__init__()
-
-        self.task_specific_prompt_length = task_specific_prompt_length
-        self.prompt_length = prompt_length
-        self.top_k = top_k
-        self.dim_tokens_enc = dim_tokens_enc
-        self.prompt_pool = prompt_pool
-        self.prompt_deep = prompt_deep
-        self.main_tasks = main_tasks
-        self.patch_size = patch_size
-        self.embed_dim = embed_dim
-        self.preds_per_patch = preds_per_patch
-        self.class_dim = int(embed_dim // preds_per_patch)
-        self.num_classes = int(num_classes)
-        self.interpolate_mode = interpolate_mode
-        self.not_self_attn = not_self_attn
-        self.scale = self.dim_tokens_enc ** -1
-        
-        #For attention (prompt pool + task specific prompt)
-        # self.self_attention1 = CrossMultiHeadAttention(embed_dim= self.dim_tokens_enc , num_heads= 8 )
-     
-        # self.decoder_block = DecoderBlock( dim=self.dim_tokens_enc,num_heads=8)
-
-        
-        self.norm_mask = nn.LayerNorm(self.task_specific_prompt_length)
-        self.norm = nn.LayerNorm(768)
-        self.norm3 = nn.LayerNorm(768)
-        self.norm2 = nn.LayerNorm([144,144])
-        self.batch_norm = nn.BatchNorm2d(self.num_classes)
-        #blocks
-        self.blocks = nn.Sequential(*[
-            ConvNeXtBlock(dim=self.class_dim )
-            for _ in range(depth)
-        ])
-        self.ca_1 = CrossAttention(dim=768)
-        self.ca_2 = CrossAttention(dim=768)
-        self.final_layer = nn.Conv2d(self.class_dim ,self.num_classes, 1)
-        self.final_prompt = nn.Conv2d(self.task_specific_prompt_length ,self.num_classes, 1)
-        # self.final_prompt_2 = nn.Conv2d(self.task_specific_prompt_length ,1, 1)
-        self.apply(self._init_weights)
-        
-    def init(self, dim_tokens_enc: int = 768 
-         ):
-        """
-        Initialize parts of decoder that are dependent on dimension of encoder tokens.
-        Should be called when setting up MultiMAE.
-
-        :param dim_tokens_enc: Dimension of tokens coming from encoder
-        """
-        self.in_channels = dim_tokens_enc * len(self.main_tasks)
-
-        # Projection of encoder tokens to the patch dimension
-        self.proj_dec = nn.Linear(self.in_channels, self.embed_dim,bias = False)
-        self._init_weights(self.proj_dec)
-        
-        # self.proj_patch = nn.Linear(self.embed_dim, self.embed_dim, bias=False)
-        # self.proj_classes = nn.Linear(self.embed_dim, self.embed_dim, bias=False)
-        # # Task specific prompts
-        # self.task_specific_prompts = nn.Parameter(torch.rand(1,self.task_specific_prompt_length
-        # ,dim_tokens_enc))
-
-    def _init_weights(self, m):
-        if isinstance(m, nn.Linear):
-            trunc_normal_(m.weight, std=.02)
-            if isinstance(m, nn.Linear) and m.bias is not None:
-                nn.init.constant_(m.bias, 0)
-        elif isinstance(m, nn.LayerNorm):
-            nn.init.constant_(m.bias, 0)
-            nn.init.constant_(m.weight, 1.0)
-    
-    def adapt_tokens(self, encoder_tokens, input_info):
-        # Adapt tokens
-        
-        x = encoder_tokens
-        return x 
-    
-
-    def forward(self, encoder_tokens: torch.Tensor, input_info: Dict):
-
-        H, W = input_info['image_size']
-        N_H, N_W = H // self.patch_size, W // self.patch_size
-        
-        x = self.adapt_tokens(encoder_tokens, input_info)
-###############################################################################################################################
-#EXTRA MODULE
-        
-        # 2nd path
-        origin_prompts_1 = x[:,:self.task_specific_prompt_length,:]
-        x = x[:,self.task_specific_prompt_length:,:] #original prompt 때고
-        origin_x = x
-        x = self.proj_dec(x)
-        
-        x = x[:,1+ self.task_specific_prompt_length :,:] #RGB만 남겨놓고
-       
-    #   # pseudo semseg
-        p_to_im =  (self.ca_1(origin_x[:,1+  self.task_specific_prompt_length:,:] ,origin_prompts_1)) # B image 768
-        im_to_p = (origin_prompts_1 + self.ca_2(origin_prompts_1 , p_to_im)) # B prompt 768
-        prompt_seg = (p_to_im @ im_to_p.transpose(1,2)) 
-        prompt_seg = rearrange(prompt_seg ,"b (h w) c -> b c h w" , h = N_H , w = N_W)
-        prompt_seg = self.final_prompt(prompt_seg)
-        prompt_seg = self.batch_norm(prompt_seg)
-        prompt_seg = F.interpolate(prompt_seg, size=(H,W) , mode= self.interpolate_mode)
-        
- ################################################################################################################################
-        # Real pred
-        x = rearrange(x, "b n (p c) -> b (n p) c", n=N_H * N_W, p=self.preds_per_patch, c=self.class_dim) # b 160*160 384
-
-        x = rearrange(x, "b (nh nw ph pw) c -> b c (nh ph) (nw pw)",
-                        nh=N_H, nw=N_W,
-                        ph=int(self.preds_per_patch ** 0.5),
-                        pw=int(self.preds_per_patch ** 0.5))
-        
-        x = self.blocks(x)
-        # x = self.norm2(x)
-        x = self.final_layer(x) # B 40 160 160  , prompt = B 40 6144
-        x = F.interpolate(x, size=(H, W), mode=self.interpolate_mode )
-        return x , prompt_seg
-
-
-
 
 
 
@@ -1013,6 +861,7 @@ class VPTAdapter(nn.Module):
         self.norm2 = nn.LayerNorm([144,144])
         self.batch_norm = nn.BatchNorm2d(self.num_classes)
         #blocks
+        
         self.blocks = nn.Sequential(*[
             ConvNeXtBlock(dim=self.class_dim )
             for _ in range(depth)
@@ -1161,14 +1010,15 @@ class MaskFormer(nn.Module):
 
         
         self.norm_mask = nn.LayerNorm(self.task_specific_prompt_length)
-        self.norm = nn.LayerNorm(768)
+        self.norm = nn.LayerNorm(1600)
         self.norm3 = nn.LayerNorm(768)
         self.norm2 = nn.LayerNorm([144,144])
         self.batch_norm = nn.BatchNorm2d(self.num_classes)
         #blocks
-        self.blocks = nn.Sequential(*[
-            ConvNeXtBlock(dim=self.class_dim )
-            for _ in range(depth)
+        dpr = [x.item() for x in torch.linspace(0, 0.1, depth)]
+        self.blocks = nn.ModuleList([
+            Block(dim=embed_dim, num_heads=12, drop_path = dpr[i] ,use_prompt_mask=None,prompt_size=0)
+            for i in range(depth)
         ])
         
         self.token_blocks = CrossAttention(dim=embed_dim)
@@ -1230,21 +1080,16 @@ class MaskFormer(nn.Module):
         x = self.proj_dec(x)
         
         x = x[:,1 +N_H*N_W:,:] #RGB만 남겨놓고
-    
  ################################################################################################################################
         # Real pred
-        x = rearrange(x, "b n (p c) -> b (n p) c", n=N_H * N_W, p=self.preds_per_patch, c=self.class_dim) # b 160*160 384
-
-        x = rearrange(x, "b (nh nw ph pw) c -> b c (nh ph) (nw pw)",
-                        nh=N_H, nw=N_W,
-                        ph=int(self.preds_per_patch ** 0.5),
-                        pw=int(self.preds_per_patch ** 0.5))
-        
-        x = self.blocks(x) # 384 160 160
-        x = rearrange(x, "b c h w -> b c (h w)")
+        for blk in self.blocks:
+            x = blk(x)
+        x = rearrange(x, "b n c -> b c n") # b 160*160 384
         x = token @ x
-        x = rearrange(x, "b c (h w) -> b c h w" , h = 160 , w =  160)
+        x = self.norm(x)
+        x = rearrange(x, 'b c (h w) -> b c h w', h=40, w=40)
         x = F.interpolate(x, size=(H, W), mode=self.interpolate_mode )
+
         return x 
     
     
@@ -1360,7 +1205,6 @@ class ConvNeXtAdapter(nn.Module):
     def forward(self, encoder_tokens: torch.Tensor, input_info: Dict):
 
         H, W = input_info['image_size']
-        score =input_info
         N_H, N_W = H // self.patch_size, W // self.patch_size
         
         x = self.adapt_tokens(encoder_tokens, input_info)
@@ -1373,10 +1217,10 @@ class ConvNeXtAdapter(nn.Module):
         origin_x = x
         x = self.proj_dec(x)
         
-        x = x[:,1+ self.task_specific_prompt_length :,:] #RGB만 남겨놓고
+        x = x[:,1+ self.task_specific_prompt_length:,:] #RGB만 남겨놓고
        
     #   # pseudo semseg
-        p_to_im =  (self.ca_1(origin_x[:,1+  self.task_specific_prompt_length:,:] ,origin_prompts_1)) # B image 768
+        p_to_im =  (self.ca_1(origin_x[:,1+  self.task_specific_prompt_length : ,:] ,origin_prompts_1)) # B image 768
         im_to_p = (origin_prompts_1 + self.ca_2(origin_prompts_1 , p_to_im)) # B prompt 768
         prompt_seg = (p_to_im @ im_to_p.transpose(1,2)) 
         prompt_seg = rearrange(prompt_seg ,"b (h w) c -> b c h w" , h = N_H , w = N_W)
@@ -1397,7 +1241,7 @@ class ConvNeXtAdapter(nn.Module):
         # x = self.norm2(x)
         x = self.final_layer(x) # B 40 160 160  , prompt = B 40 6144
         x = F.interpolate(x, size=(H, W), mode=self.interpolate_mode )
-        return x , prompt_seg 
+        return x , prompt_seg  
 
 
 

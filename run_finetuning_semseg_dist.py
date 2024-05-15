@@ -683,21 +683,8 @@ def main(args):
         msg = model.load_state_dict(state_dict, strict=False)
         print(msg)
 
-        print('Testing with best checkpoint')
-        test_stats = evaluate(model=model, criterion=criterion, data_loader=data_loader_test,
-                              device=device, epoch=checkpoint['epoch'], in_domains=args.in_domains,
-                              num_classes=args.num_classes, log_images=True, dataset_name=args.dataset_name,
-                              mode='test', fp16=args.fp16, return_all_layers=return_all_layers)
-        log_stats = {f'test/{k}': v for k, v in test_stats.items()}
-        if log_writer is not None:
-            log_writer.set_step(args.epochs * num_training_steps_per_epoch)
-            log_writer.update(log_stats)
-        if args.output_dir and utils.is_main_process():
-            with open(os.path.join(args.output_dir, "log.txt"), mode="a", encoding="utf-8") as f:
-                f.write(json.dumps(log_stats) + "\n")
 
-
-def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, data_loader: Iterable,
+def train_one_epoch(model: torch.nn.Module, tasks_loss_fn: Dict[str, torch.nn.Module], data_loader: Iterable,
                     optimizer: torch.optim.Optimizer, device: torch.device, epoch: int,
                     loss_scaler, max_norm: float = 0, log_writer=None, start_steps=None,
                     lr_schedule_values=None, wd_schedule_values=None, in_domains=None, fp16=True,
