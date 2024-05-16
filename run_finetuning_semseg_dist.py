@@ -47,7 +47,7 @@ import utils.data_constants as data_constants
 from multimae import multimae_l2p
 from multimae.input_adapters import PatchedInputAdapter, SemSegInputAdapter, PromptPatchedInputAdapter
 from multimae.output_adapters import (ConvNeXtAdapter, DPTOutputAdapter, VPTAdapter,
-                                      SegmenterMaskTransformerAdapter, ViTAdapter,)
+                                      SegmenterMaskTransformerAdapter, ViTAdapter,MaskFormer)
 from utils import NativeScalerWithGradNormCount as NativeScaler
 from utils import create_model
 from utils.data_constants import COCO_SEMSEG_NUM_CLASSES
@@ -442,6 +442,8 @@ def main(args):
         'convnext': partial(ConvNeXtAdapter, preds_per_patch=args.decoder_preds_per_patch, depth=args.decoder_depth,
                             interpolate_mode=args.decoder_interpolate_mode, main_tasks=args.decoder_main_tasks.split('-')),
         'dpt': partial(DPTOutputAdapter, stride_level=1, main_tasks=args.decoder_main_tasks.split('-'), head_type='semseg'),
+        'maskformer' :partial(MaskFormer, preds_per_patch=args.decoder_preds_per_patch, depth=args.decoder_depth,
+                            interpolate_mode=args.decoder_interpolate_mode, main_tasks=args.decoder_main_tasks.split('-')),
     }
     
     output_adapters = {
@@ -587,6 +589,8 @@ def main(args):
         criterion = torch.nn.CrossEntropyLoss(ignore_index=255)                
     elif args.output_adapter == 'segmenter' :
         criterion = torch.nn.CrossEntropyLoss(ignore_index=255)
+    elif args.output_adapter == 'maskformer' :
+        criterion = torch.nn.CrossEntropyLoss(ignore_index=255)
         
     print("criterion = %s" % str(criterion))
     print("Output Adapter: ", args.output_adapter)
@@ -684,7 +688,7 @@ def main(args):
         print(msg)
 
 
-def train_one_epoch(model: torch.nn.Module, tasks_loss_fn: Dict[str, torch.nn.Module], data_loader: Iterable,
+def train_one_epoch(model: torch.nn.Module, criterion, data_loader: Iterable,
                     optimizer: torch.optim.Optimizer, device: torch.device, epoch: int,
                     loss_scaler, max_norm: float = 0, log_writer=None, start_steps=None,
                     lr_schedule_values=None, wd_schedule_values=None, in_domains=None, fp16=True,
@@ -864,6 +868,8 @@ def evaluate(model, criterion, data_loader, device, epoch, args,in_domains, num_
             seg_pred_argmax = seg_pred[:, :num_classes].argmax(dim=1)               
         elif args.output_adapter == 'segmenter' :
             seg_pred_argmax = seg_pred[:, :num_classes].argmax(dim=1)
+        elif args.output_adapter == 'maskformer' :
+            seg_pred_argmax = seg_pred[:, :num_classes].argmax(dim=1)            
 
         seg_preds.extend(list(seg_pred_argmax.cpu().numpy()))
         seg_gts.extend(list(seg_gt.cpu().numpy()))

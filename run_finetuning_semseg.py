@@ -405,7 +405,7 @@ def main(args):
     }
 
     output_adapters = {
-        'semseg': adapters_dict['segmenter'](
+        'semseg': adapters_dict['convnext'](
             num_classes=args.num_classes_with_void,
             embed_dim=args.decoder_dim, patch_size=args.patch_size, 
             prompt_deep = args.prompt_deep , prompt_shallow = args.prompt_shallow,
@@ -522,22 +522,22 @@ def main(args):
     print("Max WD = %.7f, Min WD = %.7f" % (max(wd_schedule_values), min(wd_schedule_values)))
 
     def custom_loss(preds,target) :
-        real_preds, prompt_seg, _ = preds
+        real_preds, prompt_seg = preds
         fcl = FocalLoss(ignore_index=255)
         fc_loss = fcl(real_preds,target)
         mse = torch.nn.MSELoss()
-        target = label_to_one_hot_label(target ,40 , 'cuda:0' )
+        target = label_to_one_hot_label(target ,40 , target.device )
         mse_loss = mse(real_preds, target)
         loss_prompt_seg = mse(prompt_seg,target)
         
-        loss = (fc_loss * 20 + mse_loss) + (150* loss_prompt_seg) 
+        loss = (fc_loss * 20 + mse_loss) + (150*loss_prompt_seg) 
         # loss = loss_prompt_seg
         #print(("Image Loss:", fc_loss * 20 + mse_loss).item() ,"SGT Loss: ", (150* loss_prompt_seg).item())
         return loss
     
     # criterion = FocalLoss(alpha = alpha.to('cuda:0'))
-    # criterion = custom_loss
-    criterion = torch.nn.CrossEntropyLoss(ignore_index=255)
+    criterion = custom_loss
+    # criterion = torch.nn.CrossEntropyLoss(ignore_index=255)
     print("criterion = %s" % str(criterion))
 
     # Specifies if transformer encoder should only return last layer or all layers for DPT
@@ -810,14 +810,14 @@ def evaluate(model, criterion, data_loader, device, epoch, in_domains, num_class
         
         loss_value = loss.item()
         # If there is void, exclude it from the preds and take second highest class
-        seg_pred_argmax = seg_pred[:, :num_classes].argmax(dim=1)
+        seg_pred_argmax = seg_pred[0][:, :num_classes].argmax(dim=1)
         seg_preds.extend(list(seg_pred_argmax.cpu().numpy()))
         seg_gts.extend(list(seg_gt.cpu().numpy()))
         # attn_heat_map = seg_pred[2].mean(dim=1)
         # save_attention_maps(attn_heat_map)
         if log_images:
             rgb_gts.extend(tasks_dict['rgb'].cpu().unbind(0))
-            seg_preds_with_void.extend(list(seg_pred.argmax(dim=1).cpu().numpy()))
+            seg_preds_with_void.extend(list(seg_pred[0].argmax(dim=1).cpu().numpy()))
             if 'depth' in tasks_dict:
                 depth_gts.extend(tasks_dict['depth'].cpu().unbind(0))
 

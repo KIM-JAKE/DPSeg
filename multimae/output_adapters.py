@@ -1025,7 +1025,6 @@ class MaskFormer(nn.Module):
         self.cls_emb = nn.Parameter(torch.zeros(1, 40, embed_dim))
         trunc_normal_(self.cls_emb, std=0.02)
         
-        
         # self.ca_1 = CrossAttention(dim=768)
         # self.ca_2 = CrossAttention(dim=768)
         self.final_layer = nn.Conv2d(self.class_dim ,self.num_classes, 1)
@@ -1217,10 +1216,16 @@ class ConvNeXtAdapter(nn.Module):
         origin_x = x
         x = self.proj_dec(x)
         
-        x = x[:,1+ self.task_specific_prompt_length:,:] #RGB만 남겨놓고
+        x = x[:,1+ self.task_specific_prompt_length+N_W*N_H:,:] #RGB만 남겨놓고
        
     #   # pseudo semseg
-        p_to_im =  (self.ca_1(origin_x[:,1+  self.task_specific_prompt_length : ,:] ,origin_prompts_1)) # B image 768
+        # prompt_seg = origin_x[:,1+  self.task_specific_prompt_length+N_W*N_H : ,:] @ origin_prompts_1.transpose(1,2)
+        # prompt_seg = rearrange(prompt_seg ,"b (h w) c -> b c h w" , h = N_H , w = N_W)
+        # prompt_seg = self.final_prompt(prompt_seg)
+        # prompt_seg = self.batch_norm(prompt_seg)
+        # prompt_seg = F.interpolate(prompt_seg, size=(H,W) , mode= self.interpolate_mode)
+        
+        p_to_im =  (self.ca_1(origin_x[:,1+  self.task_specific_prompt_length+N_W*N_H : ,:] ,origin_prompts_1)) # B image 768
         im_to_p = (origin_prompts_1 + self.ca_2(origin_prompts_1 , p_to_im)) # B prompt 768
         prompt_seg = (p_to_im @ im_to_p.transpose(1,2)) 
         prompt_seg = rearrange(prompt_seg ,"b (h w) c -> b c h w" , h = N_H , w = N_W)
@@ -1468,6 +1473,7 @@ class VPTAdapter(nn.Module):
         
         x = self.adapt_tokens(encoder_tokens, input_info)
         x = x[:,1 + 2* self.task_specific_prompt_length:,:]
+        # x = x[:,1 + 2* self.task_specific_prompt_length:+N_W*N_H,:] #RGB만 남겨놓고
         x = self.proj_dec(x)
 ###############################################################################################################################
 #EXTRA MODULE

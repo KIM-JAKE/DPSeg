@@ -1,7 +1,5 @@
-# NYU semseg config
-
 # Finetune from:
-finetune:  "/root/datasets/multimae-b_98_rgb+-depth-semseg_1600e_multivit-afff3f8c (1).pth"
+finetune:  '/root/datasets/jake/multimae-b_98_rgb+-depth-semseg_1600e_multivit-afff3f8c (1).pth' # Change me
 
 # Input tasks
 in_domains: rgb-depth
@@ -12,16 +10,16 @@ model: multivit_base
 patch_size: 16
 num_global_tokens: 1
 drop_path_encoder: 0.1
-output_adapter: convnext
+output_adapter: convnext # Change me
 decoder_dim: 6144
 decoder_preds_per_patch: 16
 decoder_depth: 4
 
 # Train
 epochs: 300
-opt: adamw
-lr: 0.00002 # = 1.5e-5
-warmup_lr: 0.0000002 # = 1e-6
+opt: Adamw
+lr: 0.00002
+warmup_lr: 0.0000002
 min_lr: 0.
 warmup_epochs: 5
 batch_size: 1
@@ -34,16 +32,16 @@ open_layer : None
 aug_name: simple
 
 # Data info
-data_path: "/root/datasets/NYUv2_Dataset/NYUv2/NYUv2/train"
-eval_data_path: "/root/datasets/NYUv2_Dataset/NYUv2/NYUv2/test" # Change me
+data_path: '/root/datasets/jake/NYUv2_Dataset/NYUv2/NYUv2/train' # Change me
+eval_data_path: '/root/datasets/jake/NYUv2_Dataset/NYUv2/NYUv2/test' # Change me
 num_classes: 40
-dataset_name: nyuv2
-dist_eval: True
+dataset_name: nyu   
+dist_eval: False
 seg_reduce_zero_label: True
 eval_freq: 10
 
 # Misc.
-find_unused_params: False
+find_unused_params: True
 
 #prompt
 prompt_mode : deep
@@ -53,15 +51,15 @@ prompt_deep : True
 top_k : 5
 size : 5
 length : 5 
-task_specific_prompt_length : 200
+task_specific_prompt_length : 400
 not_self_attn : False
 use_prompt_mask : True
 
 # Wandb and logging
 log_wandb: True # Set to True to log to Weights & Biases
-wandb_project: 'MultiMAE-Ours-NYU-RGBD-Group'
+wandb_project: 'AB-token-length'
 wandb_entity: null # Change if needed
-wandb_run_name: 'NYU-BEST-group=10'
+wandb_run_name: '400'
 log_images_wandb: False
-log_images_freq: 20
-output_dir: '/root/workspace/Results/NYU-BEST-group=10'
+log_images_freq: 400
+output_dir: '/root/workspace/jake/Results/400'
