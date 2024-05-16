@@ -1,0 +1,65 @@
+# Finetune from:
+finetune:  '/root/datasets/jake/multimae-b_98_rgb+-depth-semseg_1600e_multivit-afff3f8c (1).pth' # Change me
+
+# Input tasks
+in_domains: rgb
+seed : 0
+
+# Architecture
+model: multivit_base
+patch_size: 16
+num_global_tokens: 1
+drop_path_encoder: 0.1
+output_adapter: maskformer # Change me
+decoder_dim: 768
+decoder_preds_per_patch: 16
+decoder_depth: 2
+
+# Train
+epochs: 300
+opt: Adamw
+lr: 0.00005
+warmup_lr: 0.0000005
+min_lr: 0.
+warmup_epochs: 5
+batch_size: 1
+input_size: 640
+layer_decay: 0.75
+weight_decay: 0.00001
+open_layer : None
+
+# Augmentation
+aug_name: simple
+
+# Data info
+data_path: '/root/datasets/jake/srgbd/train' # Change me
+eval_data_path: '/root/datasets/jake/srgbd/test' # Change me
+num_classes: 25
+dataset_name: deliver   
+dist_eval: False
+seg_reduce_zero_label: True
+eval_freq: 10
+
+# Misc.
+find_unused_params: True
+
+#prompt
+prompt_mode : deep
+prompt_pool : True
+prompt_shallow : False
+prompt_deep : True
+top_k : 5
+size : 5
+length : 5 
+task_specific_prompt_length : 0
+not_self_attn : False
+use_prompt_mask : True
+
+# Wandb and logging
+log_wandb: True # Set to True to log to Weights & Biases
+wandb_project: 'SRGBD-Maskformer'
+wandb_entity: null # Change if needed
+wandb_run_name: 'SRGBD-MASKFORMER'
+log_images_wandb: False
+log_images_freq: 100
+output_dir: '/root/workspace/jake/Results/SRGBD-MASKFORMER-re'
