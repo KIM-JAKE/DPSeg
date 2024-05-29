@@ -107,15 +107,15 @@ class MultiMAE(nn.Module):
         self.task_specific_prompts_1 = nn.Parameter(torch.rand(1, self.task_specific_prompt_length, self.dim_tokens))
         self.task_specific_prompts_1 = nn.init.kaiming_normal_(self.task_specific_prompts_1)
 
-        # self.ca = CrossAttention(dim=768)
-        # self.lin = nn.Linear(768,768)
-        # self.ca2 = CrossAttention(dim=768)
-        # self.lin2 = nn.Linear(768,768)
-        # self.mlp_2 = Mlp(in_features= 768 , hidden_features= 4* 768 , out_features= 768 , drop = 0.0 )
-        # self.norm_first = nn.LayerNorm(768)
-        # self.norm = nn.LayerNorm(768)
-        # self.norm2 = nn.LayerNorm(768)
-        # self.norm3 = nn.LayerNorm(768)
+        self.ca = CrossAttention(dim=768)
+        self.lin = nn.Linear(768,768)
+        self.ca2 = CrossAttention(dim=768)
+        self.lin2 = nn.Linear(768,768)
+        self.mlp_2 = Mlp(in_features= 768 , hidden_features= 4* 768 , out_features= 768 , drop = 0.0 )
+        self.norm_first = nn.LayerNorm(768)
+        self.norm = nn.LayerNorm(768)
+        self.norm2 = nn.LayerNorm(768)
+        self.norm3 = nn.LayerNorm(768)
         
         # self.task_specific_prompts_2 = nn.Parameter(torch.rand(1, self.task_specific_prompt_length, self.dim_tokens))
         # self.task_specific_prompts_2 = nn.init.kaiming_normal_(self.task_specific_prompts_1)
@@ -621,7 +621,7 @@ class MultiViT(MultiMAE):
         preds = {
             domain: self.output_adapters[domain](
                 encoder_tokens=encoder_tokens,
-                input_info=input_info,
+                input_info=input_info
             )
             for domain in self.output_adapters
         }

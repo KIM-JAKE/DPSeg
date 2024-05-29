@@ -582,7 +582,7 @@ def main(args):
     
     # criterion = FocalLoss(alpha = alpha.to('cuda:0'))
     if args.output_adapter == 'convnext' :
-        criterion = custom_loss
+        criterion = torch.nn.CrossEntropyLoss(ignore_index=255) 
     elif args.output_adapter == 'vit' :
         criterion = custom_loss
     elif args.output_adapter == 'vpt':
@@ -605,7 +605,7 @@ def main(args):
         val_stats = evaluate(model=model, criterion=criterion, data_loader=data_loader_val,
                              device=device, epoch=-1, in_domains=args.in_domains,
                              num_classes=args.num_classes, dataset_name=args.dataset_name, mode='val',
-                             fp16=args.fp16, return_all_layers=return_all_layers)
+                             fp16=args.fp16, return_all_layers=return_all_layers,args=args)
         print(f"Performance of the network on the {len(dataset_val)} validation images")
         miou, a_acc, acc, loss = val_stats['mean_iou'], val_stats['pixel_accuracy'], val_stats['mean_accuracy'], val_stats['loss']
         print(f'* mIoU {miou:.3f} aAcc {a_acc:.3f} Acc {acc:.3f} Loss {loss:.3f}')
@@ -731,7 +731,6 @@ def train_one_epoch(model: torch.nn.Module, criterion, data_loader: Iterable,
             preds = model(input_dict, return_all_layers=return_all_layers)
             seg_pred, seg_gt  = preds['semseg'], tasks_dict['semseg'] 
             loss = criterion(seg_pred, seg_gt)
-
         loss_value = loss.item()
 
         optimizer.zero_grad()
@@ -827,7 +826,7 @@ def evaluate(model, criterion, data_loader, device, epoch, args,in_domains, num_
         with torch.cuda.amp.autocast(enabled=fp16):
             preds = model(input_dict, return_all_layers=return_all_layers)
             seg_pred, seg_gt  = preds['semseg'], tasks_dict['semseg'] 
-            loss = criterion(seg_pred, seg_gt)
+            loss = criterion(seg_pred[0], seg_gt)
 
         # prompts = seg_pred[2].detach().cpu() # B 12 200 1600 
         # attention_mean = prompts.mean(dim=1) # B 200 1600
@@ -861,7 +860,7 @@ def evaluate(model, criterion, data_loader, device, epoch, args,in_domains, num_
         loss_value = loss.item()
         # If there is void, exclude it from the preds and take second highest class
         if args.output_adapter == 'convnext' :
-            seg_pred_argmax = seg_pred[0][:, :num_classes].argmax(dim=1)
+            seg_pred_argmax = seg_pred[:, :num_classes].argmax(dim=1)
         elif args.output_adapter == 'vit' :
             seg_pred_argmax = seg_pred[0][:, :num_classes].argmax(dim=1)
         elif args.output_adapter == 'vpt':
@@ -869,12 +868,12 @@ def evaluate(model, criterion, data_loader, device, epoch, args,in_domains, num_
         elif args.output_adapter == 'segmenter' :
             seg_pred_argmax = seg_pred[:, :num_classes].argmax(dim=1)
         elif args.output_adapter == 'maskformer' :
-            seg_pred_argmax = seg_pred[:, :num_classes].argmax(dim=1)            
+            seg_pred_argmax = seg_pred[0][:, :num_classes].argmax(dim=1)            
 
         seg_preds.extend(list(seg_pred_argmax.cpu().numpy()))
         seg_gts.extend(list(seg_gt.cpu().numpy()))
-        # attn_heat_map = seg_pred[2].mean(dim=1) # B 12 200 1600
-        # save_attention_maps(attn_heat_map)
+        attn_heat_map = seg_pred[1] # B 12 200 1600
+        save_attention_maps(attn_heat_map)
         if log_images:
             rgb_gts.extend(tasks_dict['rgb'].cpu().unbind(0))
             seg_preds_with_void.extend(list(seg_pred.argmax(dim=1).cpu().numpy()))
@@ -934,7 +933,7 @@ def save_average_attention_maps(attn_weights, output_dir="/root/workspace/attn_m
         filename = f"{output_dir}/attention_map_{timestamp}.png"
         plt.imsave(filename, upsampled_attn_map, cmap='hot')
 
-def save_attention_maps(attn_weights, output_dir="/root/workspace/attn_map_per_prompt", patch_size=16, img_dim=576):
+def save_attention_maps(attn_weights, output_dir="/root/workspace/maskformer_attnmap_28_nyu", patch_size=16, img_dim=640):
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
     
@@ -943,11 +942,11 @@ def save_attention_maps(attn_weights, output_dir="/root/workspace/attn_map_per_p
     
     for batch_idx in range(batch_size):
         for prompt_idx in range(prompt_size):
-            attn_map = attn_weights[batch_idx, prompt_idx, :].reshape(36, 36)
+            attn_map = attn_weights[batch_idx, prompt_idx, :].reshape(40, 40)
             upsampled_attn_map = upsample_attention(attn_map, patch_size, img_dim)
             
             filename = f"{output_dir}/{timestamp}_prompt_{prompt_idx}.png"
-            plt.imsave(filename, upsampled_attn_map, cmap='hot')
+            plt.imsave(filename, upsampled_attn_map)
             
 def compute_metrics_distributed(seg_preds, seg_gts, size, num_classes, device, ignore_index=utils.SEG_IGNORE_INDEX, dist_on='cpu'):
 

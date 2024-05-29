@@ -1022,10 +1022,9 @@ class MaskFormer(nn.Module):
         ])
         
         self.token_blocks = CrossAttention(dim=embed_dim)
-        self.cls_emb = nn.Parameter(torch.zeros(1, 40, embed_dim))
+        self.cls_emb = nn.Parameter(torch.zeros(1, self.num_classes, embed_dim))
         trunc_normal_(self.cls_emb, std=0.02)
-        
-        # self.ca_1 = CrossAttention(dim=768)
+        self.lin=nn.Linear(768,768)        # self.ca_1 = CrossAttention(dim=768)
         # self.ca_2 = CrossAttention(dim=768)
         self.final_layer = nn.Conv2d(self.class_dim ,self.num_classes, 1)
         # self.final_prompt = nn.Conv2d(self.task_specific_prompt_length ,self.num_classes, 1)
@@ -1076,6 +1075,8 @@ class MaskFormer(nn.Module):
         x = self.adapt_tokens(encoder_tokens, input_info)
         cls_emb = self.cls_emb.expand(x.shape[0], -1, -1)
         token = self.token_blocks(cls_emb , x) # 40, 768
+        token = self.norm3(token)
+        token = self.lin(token)
         x = self.proj_dec(x)
         
         x = x[:,1 +N_H*N_W:,:] #RGB만 남겨놓고
@@ -1083,13 +1084,17 @@ class MaskFormer(nn.Module):
         # Real pred
         for blk in self.blocks:
             x = blk(x)
-        x = rearrange(x, "b n c -> b c n") # b 160*160 384
-        x = token @ x
+        x = rearrange(x, "b n c -> b c n") # b 768 2304
+        token = F.normalize(token, dim=2, p=2)
+        x = F.normalize(x, dim=1, p=2)
+        x = token @ x # b 25 2304
+        attn = x
         x = self.norm(x)
         x = rearrange(x, 'b c (h w) -> b c h w', h=40, w=40)
         x = F.interpolate(x, size=(H, W), mode=self.interpolate_mode )
 
-        return x 
+        return x ,attn
+
     
     
 class ConvNeXtAdapter(nn.Module):
@@ -1205,7 +1210,7 @@ class ConvNeXtAdapter(nn.Module):
 
         H, W = input_info['image_size']
         N_H, N_W = H // self.patch_size, W // self.patch_size
-        
+        # attn = attn[:,:,1+ self.task_specific_prompt_length+N_W*N_H:,1+ self.task_specific_prompt_length+N_W*N_H:]
         x = self.adapt_tokens(encoder_tokens, input_info)
 ###############################################################################################################################
 #EXTRA MODULE
@@ -1226,7 +1231,8 @@ class ConvNeXtAdapter(nn.Module):
         # prompt_seg = F.interpolate(prompt_seg, size=(H,W) , mode= self.interpolate_mode)
         
         p_to_im =  (self.ca_1(origin_x[:,1+  self.task_specific_prompt_length+N_W*N_H : ,:] ,origin_prompts_1)) # B image 768
-        im_to_p = (origin_prompts_1 + self.ca_2(origin_prompts_1 , p_to_im)) # B prompt 768
+        im_to_p  = (self.ca_2(origin_prompts_1 , p_to_im)) # B prompt 768
+        im_to_p  = origin_prompts_1 + im_to_p
         prompt_seg = (p_to_im @ im_to_p.transpose(1,2)) 
         prompt_seg = rearrange(prompt_seg ,"b (h w) c -> b c h w" , h = N_H , w = N_W)
         prompt_seg = self.final_prompt(prompt_seg)
@@ -1246,7 +1252,7 @@ class ConvNeXtAdapter(nn.Module):
         # x = self.norm2(x)
         x = self.final_layer(x) # B 40 160 160  , prompt = B 40 6144
         x = F.interpolate(x, size=(H, W), mode=self.interpolate_mode )
-        return x , prompt_seg  
+        return x , prompt_seg 
 
 
 

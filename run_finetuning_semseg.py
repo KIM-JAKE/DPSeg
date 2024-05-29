@@ -526,7 +526,7 @@ def main(args):
         fcl = FocalLoss(ignore_index=255)
         fc_loss = fcl(real_preds,target)
         mse = torch.nn.MSELoss()
-        target = label_to_one_hot_label(target ,40 , target.device )
+        target = label_to_one_hot_label(target ,args.num_classes , target.device )
         mse_loss = mse(real_preds, target)
         loss_prompt_seg = mse(prompt_seg,target)
         
@@ -813,8 +813,14 @@ def evaluate(model, criterion, data_loader, device, epoch, in_domains, num_class
         seg_pred_argmax = seg_pred[0][:, :num_classes].argmax(dim=1)
         seg_preds.extend(list(seg_pred_argmax.cpu().numpy()))
         seg_gts.extend(list(seg_gt.cpu().numpy()))
-        # attn_heat_map = seg_pred[2].mean(dim=1)
-        # save_attention_maps(attn_heat_map)
+        #attn_heat_map = (seg_pred[2]).mean(dim=1)
+        #print(attn_heat_map.shape)
+        #save_average_attention_maps(attn_heat_map, output_dir="/root/workspace/attn_map_p_to_im")
+        
+        #attn_heat_map = seg_pred[3].mean(dim=1)
+        #print(attn_heat_map.shape)
+        #save_average_attention_maps(attn_heat_map,output_dir="/root/workspace/attn_map_im_to_p")
+        
         if log_images:
             rgb_gts.extend(tasks_dict['rgb'].cpu().unbind(0))
             seg_preds_with_void.extend(list(seg_pred[0].argmax(dim=1).cpu().numpy()))
@@ -857,16 +863,16 @@ def upsample_attention(attn_map, patch_size=16, img_dim=576):
             upsampled_attn[x_start:x_start+patch_size, y_start:y_start+patch_size] = attn_map[i, j]
     return upsampled_attn
 
-def save_average_attention_maps(attn_weights, output_dir="/root/workspace/attn_map_avg_hot", patch_size=16, img_dim=576):
+def save_average_attention_maps(attn_weights, output_dir="/root/workspace/attn_map_wot", patch_size=16, img_dim=640):
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
     
     if isinstance(attn_weights, torch.Tensor):
         attn_weights = attn_weights.cpu().numpy()
     
-    attn_weights_mean = attn_weights.mean(axis=1)  # 헤드에 대한 평균
-    attn_weights_mean = attn_weights_mean.mean(axis=1)  # 프롬프트에 대한 평균
-
+    # attn_weights_mean = attn_weights.mean(axis=1)  # 헤드에 대한 평균
+    attn_weights_mean = attn_weights.mean(axis=2)  # 프롬프트에 대한 평균
+    print(attn_weights_mean.shape)
     for batch_idx in range(attn_weights_mean.shape[0]):
         attn_map = attn_weights_mean[batch_idx].reshape(40, 40)
         upsampled_attn_map = upsample_attention(attn_map, patch_size, img_dim)

@@ -34,7 +34,7 @@ def log_semseg_wandb(
         gts: List[np.ndarray],
         depth_gts: List[np.ndarray],
         dataset_name: str = 'ade20k',
-        image_count=8, 
+        image_count=50, 
         prefix=""
     ):
 

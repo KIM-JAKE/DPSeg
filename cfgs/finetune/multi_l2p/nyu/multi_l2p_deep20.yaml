@@ -51,15 +51,15 @@ prompt_deep : True
 top_k : 5
 size : 5
 length : 5 
-task_specific_prompt_length : 10
+task_specific_prompt_length : 200
 not_self_attn : False
 use_prompt_mask : True
 
 # Wandb and logging
-log_wandb: True # Set to True to log to Weights & Biases
+log_wandb: False # Set to True to log to Weights & Biases
 wandb_project: 'AB-token-length'
 wandb_entity: null # Change if needed
 wandb_run_name: '10'
 log_images_wandb: False
 log_images_freq: 100
-output_dir: '/root/workspace/jake/Results/10'
+output_dir: '/root/workspace/baek/Results/MAEOURS-BEST'
