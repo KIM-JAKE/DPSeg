@@ -1,5 +1,5 @@
 # Finetune from:
-finetune:  '/root/datasets/jake/mae-b_dec512d8b_1600e_multivit-c477195b.pth' # Change me
+finetune:  '/root/datasets/jake/multimae-b_98_rgb+-depth-semseg_1600e_multivit-afff3f8c (1).pth' # Change me
 
 # Input tasks
 in_domains: rgb-depth
@@ -16,7 +16,7 @@ decoder_preds_per_patch: 16
 decoder_depth: 4
 
 # Train
-epochs: 300
+epochs: 350
 opt: Adamw
 lr: 0.00002
 warmup_lr: 0.0000002
@@ -33,7 +33,7 @@ aug_name: simple
 
 # Data info
 data_path: '/root/datasets/jake/NYUv2_Dataset/NYUv2/NYUv2/train' # Change me
-eval_data_path: '/root/datasets/jake/nyu_seg/test' # Change me
+eval_data_path: '/root/datasets/jake/NYUv2_Dataset/NYUv2/NYUv2/test'
 num_classes: 40
 dataset_name: nyu   
 dist_eval: True
@@ -51,15 +51,15 @@ prompt_deep : True
 top_k : 5
 size : 5
 length : 5 
-task_specific_prompt_length : 10
+task_specific_prompt_length : 200
 not_self_attn : False
 use_prompt_mask : True
 
 # Wandb and logging
 log_wandb: True # Set to True to log to Weights & Biases
-wandb_project: 'Prompt Length Ablation'
+wandb_project: 'REPRO_NYU'
 wandb_entity: null # Change if needed
-wandb_run_name: '10'
+wandb_run_name: '200'
 log_images_wandb: False
 log_images_freq: 100
-output_dir: '/root/workspace/jake/Results/10'
+output_dir: '/root/workspace/jake/Results/200_2e-5_350'
