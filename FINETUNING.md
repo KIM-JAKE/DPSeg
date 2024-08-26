@@ -47,8 +47,6 @@ OMP_NUM_THREADS=1 torchrun --nproc_per_node=8 run_finetuning_cls.py \
 
 ## Semantic segmentation
 
-We use 4 A100 GPUs for semantic segmentation fine-tuning. Configs can be found [here](cfgs/finetune/semseg).
-
 ### ADE20K
 To fine-tune MultiMAE on ADE20K semantic segmentation with default settings and **RGB** as the input modality, run:
 ```bash
@@ -60,21 +58,6 @@ OMP_NUM_THREADS=1 torchrun --nproc_per_node=4 run_finetuning_semseg.py \
 ```
 
 - For a list of possible arguments, see [`run_finetuning_semseg.py`](run_finetuning_semseg.py).
-
-
-### Hypersim
-To fine-tune MultiMAE on Hypersim semantic segmentation with default settings and **RGB** as the input modality, run:
-```bash
-OMP_NUM_THREADS=1 torchrun --nproc_per_node=4 run_finetuning_semseg.py \
---config cfgs/finetune/semseg/hypersim/ft_hypersim_25e_multimae-b_rgb.yaml \
---finetune /path/to/multimae_weights \
---data_path /path/to/hypersim/train \
---eval_data_path /path/to/hypersim/val
-```
-
-- To fine-tune using **depth-only** and **RGB + depth** as the input modalities, simply swap the config file to the appropriate one.
-- For a list of possible arguments, see [`run_finetuning_semseg.py`](run_finetuning_semseg.py).
-
 
 
 ### NYUv2
@@ -89,38 +72,3 @@ OMP_NUM_THREADS=1 torchrun --nproc_per_node=4 run_finetuning_semseg.py \
 
 - To fine-tune using **depth-only** and **RGB + depth** as the input modalities, simply swap the config file to the appropriate one.
 - For a list of possible arguments, see [`run_finetuning_semseg.py`](run_finetuning_semseg.py).
-
-
-## Depth estimation
-
-We use 2 A100 GPUs for depth estimation fine-tuning. Configs can be found [here](cfgs/finetune/depth).
-
-
-To fine-tune MultiMAE on NYUv2 depth estimation with default settings, run:
-```bash
-OMP_NUM_THREADS=1 torchrun --nproc_per_node=2 run_finetuning_depth.py \
---config cfgs/finetune/depth/ft_nyu_2000e_multimae-b.yaml \
---finetune /path/to/multimae_weights \
---data_path /path/to/nyu/train \
---eval_data_path /path/to/nyu/test_or_val
-```
-- For a list of possible arguments, see [`run_finetuning_depth.py`](run_finetuning_depth.py).
-
-## Taskonomy tasks
-
-We use 1 A100 GPU to fine-tune on Taskonomy tasks. Configs can be found [here](cfgs/finetune/taskonomy).
-
-The tasks we support are: Principal curvature, z-buffer depth, texture edges, occlusion edges, 2D keypoints,
-3D keypoints, surface normals, and reshading. 
-
-
-For example, to fine-tune MultiMAE on Taskonomy reshading with default settings, run:
-```bash
-OMP_NUM_THREADS=1 torchrun --nproc_per_node=1 run_finetuning_taskonomy.py \
---config cfgs/finetune/taskonomy/rgb2reshading-1k/ft_rgb2reshading_multimae-b.yaml \
---finetune /path/to/multimae_weights \
---data_path /path/to/taskonomy_tiny
-```
-
-- To fine-tune on a different task, simply swap the config file to the appropriate one.
-- For a list of possible arguments, see [`run_finetuning_taskonomy.py`](run_finetuning_taskonomy.py).
