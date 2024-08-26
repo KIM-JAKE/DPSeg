@@ -26,22 +26,6 @@ To modify fine-training settings, either edit / add config files or provide addi
 ### Experiment logging
 To activate logging to [Weights & Biases](https://docs.wandb.ai/), either edit the config files or use the `--log_wandb` flag along with any other extra logging arguments.
 
-
-## Classification
-
-We use 8 A100 GPUs for classification fine-tuning. Configs can be found [here](cfgs/finetune/cls).
-
-To fine-tune MultiMAE on ImageNet-1K classification using default settings, run:
-```bash
-OMP_NUM_THREADS=1 torchrun --nproc_per_node=8 run_finetuning_cls.py \
---config cfgs/finetune/cls/ft_in1k_100e_multimae-b.yaml \
---finetune /path/to/multimae_weights \
---data_path /path/to/in1k/train/rgb \
---eval_data_path /path/to/in1k/val/rgb
-```
-
-- For a list of possible arguments, see [`run_finetuning_cls.py`](run_finetuning_cls.py).
-
 ## Semantic segmentation
 
 ### ADE20K
