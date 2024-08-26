@@ -4,10 +4,7 @@ We provide fine-tuning scripts for classification, semantic segmentation, depth 
 Please check [SETUP.md](SETUP.md) for set-up instructions first.
 
 - [General information](#general-information)
-- [Classification](#classification)
 - [Semantic segmentation](#semantic-segmentation)
-- [Depth estimation](#depth-estimation)
-- [Taskonomy tasks](#taskonomy-tasks)
 
 ## General information
 
