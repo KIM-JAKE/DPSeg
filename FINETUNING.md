@@ -64,7 +64,7 @@ OMP_NUM_THREADS=1 torchrun --nproc_per_node=4 run_finetuning_semseg.py \
 To fine-tune MultiMAE on NYUv2 semantic segmentation with default settings and **RGB** as the input modality, run:
 ```bash
 OMP_NUM_THREADS=1 torchrun --nproc_per_node=4 run_finetuning_semseg.py \
---config cfgs/finetune/semseg/nyu/ft_nyu_200e_multimae-b_rgb.yaml \
+--config /cfgs/finetune/DPSeg/nyu/DPSeg.yaml \
 --finetune /path/to/multimae_weights \
 --data_path /path/to/nyu/train \
 --eval_data_path /path/to/nyu/test_or_val
