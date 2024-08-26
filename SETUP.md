@@ -58,6 +58,8 @@ We use the following datasets in our experiments:
 - [**Hypersim**](https://github.com/apple/ml-hypersim)
 - [**NYUv2**](https://cs.nyu.edu/~silberman/datasets/nyu_depth_v2.html)
 - [**Taskonomy**](https://github.com/StanfordVL/taskonomy/tree/master/data)
+- [**SUN RGB-D**](https://rgbd.cs.princeton.edu/)
+- [**DeLiVER**](https://github.com/jamycheung/DELIVER)
 
 To download these datasets, please follow the instructions on their respective pages. 
 To prepare the NYUv2 dataset, we recommend using the provided [`prepare_nyuv2.py`](tools/prepare_nyuv2.py) script.
