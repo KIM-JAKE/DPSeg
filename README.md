@@ -1,34 +1,8 @@
-# MultiMAE: Multi-modal Multi-task Masked Autoencoders
 
-[Roman Bachmann*](https://roman-bachmann.github.io/), [David Mizrahi*](https://dmizrahi.com), [Andrei Atanov](https://andrewatanov.github.io/), [Amir Zamir](https://vilab.epfl.ch/zamir/)
-
-
- [`Website`](https://multimae.epfl.ch) | [`arXiv`](https://arxiv.org/abs/2204.01678) | [`BibTeX`](#citation)
-
-[![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/EPFL-VILAB/MultiMAE/blob/main/MultiMAE_Demo.ipynb)  [![Hugging Face Spaces](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Spaces-blue)](https://huggingface.co/spaces/EPFL-VILAB/MultiMAE)
-
-
-Official PyTorch implementation and pre-trained models for MultiMAE: Multi-modal Multi-task Masked Autoencoders.
-
-
-<p align="center">
-<img src="assets/multimae_fig.png" width=100% height=100% 
-class="center">
-</p>
-
-We introduce Multi-modal Multi-task Masked Autoencoders (**MultiMAE**), an efficient and effective pre-training strategy for Vision Transformers. 
-Given a small random sample of visible patches from multiple modalities, the MultiMAE pre-training objective is to reconstruct the masked-out regions. 
-Once pre-trained, a single MultiMAE encoder can then be used for both single-modal and multi-modal downstream transfer, yielding competitive to or significantly better results than the baselines.
 
 ## Catalog
 - [x] Pre-trained models
-- [x] MultiMAE pre-training code
-- [x] ImageNet-1K classification fine-tuning code
 - [x] Semantic segmentation fine-tuning code (single-modal & multi-modal)
-- [x] Depth estimation fine-tuning code
-- [x] Taskonomy fine-tuning code
-- [x] Colab & Hugging Face demos
-- [x] Download links for ImageNet-1K depth and semantic segmentation pseudo labels
 
 ## Pre-trained models
 
@@ -122,29 +96,10 @@ See [PRETRAINING.md](PRETRAINING.md) for pre-training instructions.
 
 See [FINETUNING.md](FINETUNING.md) for fine-tuning instructions.
 
-## Demo & visualizations
-
-For interactive demos, please see our [`website`](https://multimae.epfl.ch). Open our [`Colab notebook`](https://colab.research.google.com/github/EPFL-VILAB/MultiMAE/blob/main/MultiMAE_Demo.ipynb) to play around with the visualization code, or simply upload an image to our [`Hugging Face Spaces demo`](https://huggingface.co/spaces/EPFL-VILAB/MultiMAE).
-
 
 ## Acknowledgement
 
 This repository is built using the [timm](https://github.com/rwightman/pytorch-image-models/tree/master/timm), [DeiT](https://github.com/facebookresearch/deit), [DINO](https://github.com/facebookresearch/dino
 ), [MoCo v3](https://github.com/facebookresearch/moco-v3), [BEiT](https://github.com/microsoft/unilm/tree/master/beit), [MAE-priv](https://github.com/BUPT-PRIV/MAE-priv), and [MAE](https://github.com/facebookresearch/mae) repositories.
 
-## License
 
-This project is under the CC-BY-NC 4.0 license. See [LICENSE](LICENSE) for details.
-
-## Citation
-
-If you find this repository helpful, please consider citing our work:
-
-```BibTeX
-@article{bachmann2022multimae,
-  author    = {Roman Bachmann and David Mizrahi and Andrei Atanov and Amir Zamir},
-  title     = {{MultiMAE}: Multi-modal Multi-task Masked Autoencoders},
-  booktitle = {European Conference on Computer Vision},
-  year      = {2022},
-}
-```
