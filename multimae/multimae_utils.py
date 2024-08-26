@@ -156,27 +156,22 @@ class Mlp(nn.Module):
 
 
 class Attention(nn.Module):
-    def __init__(self, prompt_size : int, use_prompt_mask : bool , dim, input_image = 336 ,  num_heads=8, qkv_bias=False, attn_drop=0.0, proj_drop=0.0,):
+    def __init__(self,  dim,   num_heads=8, qkv_bias=False, attn_drop=0.0, proj_drop=0.0,):
         super().__init__()
         self.num_heads = num_heads
         head_dim = dim // num_heads
         self.scale = head_dim ** -0.5
-        self.input_image = input_image
-        self.prompt_size = prompt_size
         self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
         self.attn_drop = nn.Dropout(attn_drop)
         self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
-        self.use_prompt_mask = use_prompt_mask
-        self.att_size = self.prompt_size + (self.input_image // 16 ) ** 2
         
     def forward(self, x):
         B, N, C = x.shape
         qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
         q, k, v = qkv.unbind(0)   # make torchscript happy (cannot use tensor as tuple)
         attn = (q @ k.transpose(-2, -1)) * self.scale
-            
-        # 어텐션 가중치 계산 및 적용        
+                  
         attn = attn.softmax(dim=-1)
         attn = self.attn_drop(attn)
         x = (attn @ v).transpose(1, 2).reshape(B, N, C)
@@ -186,12 +181,11 @@ class Attention(nn.Module):
 
 
 class CrossAttention(nn.Module):
-    def __init__(self, dim, num_heads=8, qkv_bias=False, attn_drop=0.0, proj_drop=0.):
+    def __init__(self, dim, num_heads=8, qkv_bias=False, attn_drop=0.0, proj_drop=0. ):
         super().__init__()
         self.num_heads = num_heads
         head_dim = dim // num_heads
         self.scale = head_dim ** -0.5
-
         self.q = nn.Linear(dim, dim, bias=qkv_bias)
         self.kv = nn.Linear(dim, dim * 2, bias=qkv_bias)
 
@@ -206,7 +200,6 @@ class CrossAttention(nn.Module):
         q = self.q(x).reshape(B, N, self.num_heads, C // self.num_heads).permute(0, 2, 1, 3)
         kv = self.kv(context).reshape(B, M, 2, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
         k, v = kv[0], kv[1]
-
         attn = (q @ k.transpose(-2, -1)) * self.scale
         attn = attn.softmax(dim=-1)
         attn = self.attn_drop(attn)
@@ -219,12 +212,11 @@ class CrossAttention(nn.Module):
 
 class Block(nn.Module):
 
-    def __init__(self, dim, use_prompt_mask, prompt_size, num_heads, mlp_ratio=4., qkv_bias=False, drop=0., attn_drop=0.,
+    def __init__(self, dim, num_heads, mlp_ratio=4., qkv_bias=False, drop=0., attn_drop=0.,
                  drop_path=0., act_layer=nn.GELU, norm_layer=nn.LayerNorm):
         super().__init__()
-        self.prompt_size = prompt_size
         self.norm1 = norm_layer(dim)
-        self.attn = Attention(prompt_size, use_prompt_mask ,dim , num_heads=num_heads, qkv_bias=qkv_bias, attn_drop=attn_drop, proj_drop=drop)
+        self.attn = Attention( dim , num_heads=num_heads, qkv_bias=qkv_bias, attn_drop=attn_drop, proj_drop=drop)
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
         self.norm2 = norm_layer(dim)
         mlp_hidden_dim = int(dim * mlp_ratio)
@@ -242,7 +234,7 @@ class DecoderBlock(nn.Module):
         super().__init__()
         self.norm1 = norm_layer(dim)
         self.self_attn = Attention(dim=dim, num_heads=num_heads, qkv_bias=qkv_bias, attn_drop=attn_drop, proj_drop=drop,use_prompt_mask=False,prompt_size=0)
-        self.cross_attn = CrossAttention(dim=dim, num_heads=num_heads, qkv_bias=qkv_bias, attn_drop=attn_drop, proj_drop=drop)
+        self.cross_attn = CrossAttention(dim=dim, num_heads=num_heads, qkv_bias=qkv_bias, attn_drop=attn_drop, proj_drop=drop,mask=mask)
         self.query_norm = norm_layer(dim)
         self.context_norm = norm_layer(dim)
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()

@@ -1,5 +1,5 @@
 # Finetune from:
-finetune:  '/root/datasets/jake/multimae-b_98_rgb+-depth-semseg_1600e_multivit-afff3f8c (1).pth' # Change me
+finetune:  '/root/' # Change me
 
 # Input tasks
 in_domains: rgb-depth
@@ -16,7 +16,7 @@ decoder_preds_per_patch: 16
 decoder_depth: 4
 
 # Train
-epochs: 300
+epochs: 350
 opt: Adamw
 lr: 0.00002
 warmup_lr: 0.0000002
@@ -32,11 +32,11 @@ open_layer : None
 aug_name: simple
 
 # Data info
-data_path: '/root/datasets/jake/NYUv2_Dataset/NYUv2/NYUv2/train' # Change me
-eval_data_path: '/root/datasets/jake/NYUv2_Dataset/NYUv2/NYUv2/test' # Change me
+data_path: '/root/datasets/' # Change me
+eval_data_path: '/root/datasets/'
 num_classes: 40
 dataset_name: nyu   
-dist_eval: False
+dist_eval: True
 seg_reduce_zero_label: True
 eval_freq: 10
 
@@ -44,22 +44,13 @@ eval_freq: 10
 find_unused_params: True
 
 #prompt
-prompt_mode : deep
-prompt_pool : True
-prompt_shallow : False
-prompt_deep : True
-top_k : 5
-size : 5
-length : 5 
-task_specific_prompt_length : 150
-not_self_attn : False
-use_prompt_mask : True
+task_specific_prompt_length : 200
 
 # Wandb and logging
 log_wandb: True # Set to True to log to Weights & Biases
-wandb_project: 'AB-token-length'
+wandb_project: 'TEST'
 wandb_entity: null # Change if needed
-wandb_run_name: '150'
+wandb_run_name: 'TEST'
 log_images_wandb: False
-log_images_freq: 150
-output_dir: '/root/workspace/jake/Results/150'
+log_images_freq: 1
+output_dir: '/root/'

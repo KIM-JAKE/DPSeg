@@ -13,7 +13,7 @@
 # https://github.com/BUPT-PRIV/MAE-priv
 # https://github.com/facebookresearch/mae
 # --------------------------------------------------------
-
+import matplotlib.pyplot as plt
 import itertools
 import math
 from collections import OrderedDict
@@ -24,10 +24,10 @@ import torch
 from einops import rearrange, repeat
 from torch import nn
 from torch.distributions.dirichlet import Dirichlet
-
+from torch.nn import Dropout
 from utils.registry import register_model
 
-from .multimae_utils import Block, trunc_normal_
+from .multimae_utils import Block, trunc_normal_ , Mlp , CrossAttention , Attention
 
 __all__ = [
     'pretrain_multimae_base',
@@ -35,7 +35,7 @@ __all__ = [
     'multivit_base',
     'multivit_large',
 ]
-
+from multimae.prompt import Prompt
 
 class MultiMAE(nn.Module):
     """MultiMAE: Multi-task Multi-modal Masked Autoencoder
@@ -61,6 +61,7 @@ class MultiMAE(nn.Module):
     def __init__(self,
                  input_adapters: Dict[str, nn.Module],
                  output_adapters: Optional[Dict[str, nn.Module]],
+                 task_specific_prompt_length : int ,
                  num_global_tokens: int = 1,
                  dim_tokens: int = 768,
                  depth: int = 12,
@@ -70,33 +71,54 @@ class MultiMAE(nn.Module):
                  drop_rate: float = 0.0,
                  attn_drop_rate: float = 0.0,
                  drop_path_rate: float = 0.0,
-                 norm_layer: nn.Module = partial(nn.LayerNorm, eps=1e-6)):
+                 prompt_dropout_rate : float = 0.0 ,
+                 norm_layer: nn.Module = partial(nn.LayerNorm, eps=1e-6),**kwargs):
         super().__init__()
 
+        self.dim_tokens = dim_tokens
+        self.dim_tokens = dim_tokens
+        self.prompt_dropout_rate = prompt_dropout_rate
+        self.task_specific_prompt_length = task_specific_prompt_length
+        
+        
+        self.num_global_tokens = num_global_tokens
+        self.global_tokens = nn.Parameter(torch.zeros(1, num_global_tokens, dim_tokens))
+        
+        self.prompt_dropout = Dropout(self.prompt_dropout_rate)
+
+        self.task_specific_prompts_1 = nn.Parameter(torch.rand(1, self.task_specific_prompt_length, self.dim_tokens))
+        self.task_specific_prompts_1 = nn.init.kaiming_normal_(self.task_specific_prompts_1)
+    
         # Initialize input and output adapters
         for adapter in input_adapters.values():
-            adapter.init(dim_tokens=dim_tokens)
+            adapter.init(dim_tokens=dim_tokens,
+            )
         self.input_adapters = nn.ModuleDict(input_adapters)
         if output_adapters is not None:
             for adapter in output_adapters.values():
-                adapter.init(dim_tokens_enc=dim_tokens)
+                adapter.init(dim_tokens_enc=dim_tokens,
+                )
             self.output_adapters = nn.ModuleDict(output_adapters)
         else:
             self.output_adapters = None
-
         # Additional learnable tokens that can be used by encoder to process/store global information
-        self.num_global_tokens = num_global_tokens
-        self.global_tokens = nn.Parameter(torch.zeros(1, num_global_tokens, dim_tokens))
-        trunc_normal_(self.global_tokens, std=0.02)
-        
+
         # Transformer encoder
         dpr = [x.item() for x in torch.linspace(0, drop_path_rate, depth)]  # stochastic depth decay rule
         self.encoder = nn.Sequential(*[
-            Block(dim=dim_tokens, num_heads=num_heads, mlp_ratio=mlp_ratio, qkv_bias=qkv_bias,
-                  drop=drop_rate, attn_drop=attn_drop_rate, drop_path=dpr[i], norm_layer=norm_layer)
-            for i in range(depth)
+            Block(
+                dim=dim_tokens,
+                num_heads=num_heads, 
+                mlp_ratio=mlp_ratio, 
+                qkv_bias=qkv_bias,
+                drop=drop_rate, 
+                attn_drop=attn_drop_rate, 
+                drop_path=dpr[i], 
+                norm_layer=norm_layer
+            )
+            for i in range(depth) 
         ])
-        
+           
         self.apply(self._init_weights)
         for name, m in self.named_modules():
             if isinstance(m, nn.Linear):
@@ -129,7 +151,7 @@ class MultiMAE(nn.Module):
 
     @torch.jit.ignore
     def no_weight_decay(self):
-        no_wd_set = {'global_tokens'}
+        no_wd_set = {'global_tokens', 'task_specific_prompts_1' }
 
         for task, adapter in self.input_adapters.items():
             if hasattr(adapter, 'no_weight_decay'):
@@ -251,6 +273,7 @@ class MultiMAE(nn.Module):
         input_info = OrderedDict()
         i = 0
         input_info['tasks'] = {}
+
         for domain, tensor in input_task_tokens.items():
             num_tokens = tensor.shape[1]
             d = {
@@ -315,6 +338,8 @@ class MultiMAE(nn.Module):
             if domain in self.input_adapters
         }
 
+        input_task_tokens = input_task_tokens['prompted_embedding']
+
         input_info = self.generate_input_info(input_task_tokens=input_task_tokens, image_size=(H, W))
 
         # Select random subset of tokens from the chosen input tasks and concatenate them
@@ -344,9 +369,7 @@ class MultiMAE(nn.Module):
 
         # Add global tokens to input tokens
         global_tokens = repeat(self.global_tokens, '() n d -> b n d', b=B)
-        input_tokens = torch.cat([input_tokens, global_tokens], dim=1)
-
-        ## Transformer forward pass
+        
         encoder_tokens = self.encoder(input_tokens)
 
         ## Output decoders
@@ -415,7 +438,7 @@ def pretrain_multimae_large(
     )
     return model
 
-
+    
 class MultiViT(MultiMAE):
     """MultiViT: Multi-modal Vision Transformer
     This is MultiMAE without masking and with a simplified / faster forward pass
@@ -435,9 +458,7 @@ class MultiViT(MultiMAE):
     :param drop_path_rate: DropPath drop rate
     :param norm_layer: Type of normalization layer
     """
-
     def process_input(self, x):
-
         # If input x is a Tensor, assume it's RGB
         x = {'rgb': x} if isinstance(x, torch.Tensor) else x
         # Need image size for tokens->image reconstruction
@@ -449,23 +470,18 @@ class MultiViT(MultiMAE):
             W *= self.input_adapters['semseg'].stride_level
         else:
             B, _, H, W = list(x.values())[0].shape  # TODO: Deal with case where not all have same shape
-
         # Encode selected inputs to tokens
-        input_task_tokens = {
+        input_task_tokens  = {
             domain: self.input_adapters[domain](tensor)
             for domain, tensor in x.items()
             if domain in self.input_adapters
         }
-
-        input_info = self.generate_input_info(input_task_tokens=input_task_tokens, image_size=(H, W))
+        
+        input_info = self.generate_input_info(input_task_tokens, image_size=(H, W))
         input_tokens = torch.cat([task_tokens for task_tokens in input_task_tokens.values()], dim=1)
-
-        # Add global tokens to input tokens
-        global_tokens = repeat(self.global_tokens, '() n d -> b n d', b=B)
-        input_tokens = torch.cat([input_tokens, global_tokens], dim=1)
-
-        return input_tokens, input_info
-
+        
+        return input_tokens, input_info           
+        
     def forward(self, x: Union[Dict[str, torch.Tensor], torch.Tensor], return_all_layers=False, **kwargs):
         """
         Forward pass through input adapters, transformer encoder and output adapters.
@@ -473,40 +489,43 @@ class MultiViT(MultiMAE):
         :param x: Input tensor or dictionary of tensors
         :param return_all_layers: Set to True to return all transformer layers
         """
+        
+        input_tokens, input_info  = self.process_input(x)
+        
+        global_tokens = self.global_tokens.expand(input_tokens.size(0), -1, -1)
+        expanded_prompts_1 = self.task_specific_prompts_1.expand(input_tokens.size(0), -1, -1)
+            
+        input_tokens = torch.cat([expanded_prompts_1,global_tokens, input_tokens ], dim = 1)
 
-        input_tokens, input_info = self.process_input(x)
+        for i, layer in enumerate(self.encoder):
 
-        # Pass tokens through Transformer
-        if not return_all_layers:
-            encoder_tokens = self.encoder(input_tokens)
-        else:
-            # Optionally access every intermediate layer
-            encoder_tokens = []
-            tokens = input_tokens
-            for block in self.encoder:
-                tokens = block(tokens)
-                encoder_tokens.append(tokens)
-
-        if self.output_adapters is None:
-            return encoder_tokens
-
+            prompt = input_tokens[:,: self.task_specific_prompt_length,:]
+            input_tokens = input_tokens[:,self.task_specific_prompt_length:,:]
+            prompt = self.prompt_dropout(prompt) # B prompt_length 768
+            input_tokens = torch.cat([ prompt , input_tokens ] , dim = 1) 
+            input_tokens = layer(input_tokens)
+        
+        encoder_tokens =  torch.cat([ expanded_prompts_1, input_tokens] , dim = 1 )
+        
         # Decode tokens for each task using task-specific output adapters
         preds = {
             domain: self.output_adapters[domain](
                 encoder_tokens=encoder_tokens,
-                input_info=input_info,
+                input_info=input_info
             )
             for domain in self.output_adapters
         }
 
         return preds
 
-
 @register_model
 def multivit_base(
         input_adapters: Dict[str, nn.Module],
         output_adapters: Optional[Dict[str, nn.Module]],
         **kwargs):
+
+    print(kwargs)
+
     model = MultiViT(
         input_adapters=input_adapters,
         output_adapters=output_adapters,
@@ -519,6 +538,7 @@ def multivit_base(
         **kwargs
     )
     return model
+
 
 @register_model
 def multivit_large(

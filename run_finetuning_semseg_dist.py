@@ -44,8 +44,8 @@ import yaml
 from utils.focal_loss import FocalLoss, label_to_one_hot_label
 import utils 
 import utils.data_constants as data_constants
-from multimae import multimae_l2p
-from multimae.input_adapters import PatchedInputAdapter, SemSegInputAdapter, PromptPatchedInputAdapter
+from multimae import multimae
+from multimae.input_adapters import PatchedInputAdapter, SemSegInputAdapter
 from multimae.output_adapters import (ConvNeXtAdapter, DPTOutputAdapter, VPTAdapter,
                                       SegmenterMaskTransformerAdapter, ViTAdapter,MaskFormer)
 from utils import NativeScalerWithGradNormCount as NativeScaler
@@ -60,7 +60,6 @@ from utils.semseg_metrics import mean_iou
 from utils.copy_paste import CopyPaste
 
 class SubsetDataset(torch.utils.data.Dataset):
-    """데이터셋의 부분집합만을 반환하는 클래스"""
     def __init__(self, dataset, start_idx, end_idx):
         self.dataset = dataset
         self.start_idx = start_idx
@@ -450,9 +449,7 @@ def main(args):
         'semseg': adapters_dict[args.output_adapter](
             num_classes=args.num_classes_with_void,
             embed_dim=args.decoder_dim, patch_size=args.patch_size, 
-            prompt_deep = args.prompt_deep , prompt_shallow = args.prompt_shallow,
-            prompt_pool = args.prompt_pool,
-            prompt_length = args.length , top_k = args.top_k , pool_size = args.size , task_specific_prompt_length = args.task_specific_prompt_length , not_self_attn = args.not_self_attn , 
+            task_specific_prompt_length = args.task_specific_prompt_length 
         ),
     }
 
@@ -461,10 +458,6 @@ def main(args):
         input_adapters = input_adapters , 
         output_adapters=output_adapters,
         drop_path_rate=args.drop_path_encoder,
-        use_prompt_mask=args.use_prompt_mask,
-        prompt_deep = args.prompt_deep , prompt_shallow = args.prompt_shallow,
-            prompt_pool = args.prompt_pool,
-            prompt_length = args.length , top_k = args.top_k , pool_size = args.size , not_self_attn = args.not_self_attn , 
         task_specific_prompt_length = args.task_specific_prompt_length
     )
 
@@ -566,7 +559,7 @@ def main(args):
         args.weight_decay, args.weight_decay_end, args.epochs, num_training_steps_per_epoch)
     print("Max WD = %.7f, Min WD = %.7f" % (max(wd_schedule_values), min(wd_schedule_values)))
 
-    def custom_loss(preds,target) :
+    def Dual_Path_Loss(preds,target) :
         real_preds, prompt_seg = preds
         fcl = FocalLoss(ignore_index=255)
         fc_loss = fcl(real_preds,target)
@@ -582,9 +575,9 @@ def main(args):
     
     # criterion = FocalLoss(alpha = alpha.to('cuda:0'))
     if args.output_adapter == 'convnext' :
-        criterion = torch.nn.CrossEntropyLoss(ignore_index=255) 
+        criterion = Dual_Path_Loss
     elif args.output_adapter == 'vit' :
-        criterion = custom_loss
+        criterion = Dual_Path_Loss
     elif args.output_adapter == 'vpt':
         criterion = torch.nn.CrossEntropyLoss(ignore_index=255)                
     elif args.output_adapter == 'segmenter' :
@@ -799,7 +792,9 @@ def evaluate(model, criterion, data_loader, device, epoch, args,in_domains, num_
 
     rgb_gts = None
     seg_preds_with_void = None
+
     if log_images:
+        print("LOG IMAGES!!")
         rgb_gts = []
         seg_preds_with_void = []
         depth_gts = []
@@ -826,33 +821,27 @@ def evaluate(model, criterion, data_loader, device, epoch, args,in_domains, num_
         with torch.cuda.amp.autocast(enabled=fp16):
             preds = model(input_dict, return_all_layers=return_all_layers)
             seg_pred, seg_gt  = preds['semseg'], tasks_dict['semseg'] 
-            loss = criterion(seg_pred[0], seg_gt)
+            loss = criterion(seg_pred, seg_gt)
 
         # prompts = seg_pred[2].detach().cpu() # B 12 200 1600 
         # attention_mean = prompts.mean(dim=1) # B 200 1600
 
-        # # t-SNE 적용
+        # # # t-SNE 적용
         # tsne = TSNE(n_components=2, perplexity=30, learning_rate=200, n_iter=1000, random_state=42)
         # attention_tsne = tsne.fit_transform(attention_mean.squeeze(0))
 
-        # # KMeans 클러스터링을 적용하여 데이터 포인트 그룹화
-        # kmeans = KMeans(n_clusters=7, random_state=42)
-        # clusters = kmeans.fit_predict(attention_tsne)
-
-        # # 클러스터별 색상을 정의
-        # cluster_colors = plt.cm.get_cmap("viridis", 7)  # 5개 클러스터를 위한 색상 맵
-
         # # 플롯 생성
         # plt.figure(figsize=(10, 6))
-        # for idx, point in enumerate(attention_tsne):
-        #     plt.scatter(point[0], point[1], color=cluster_colors(clusters[idx]), s=10)  # 각 포인트에 클러스터별 색상 적용
-
         # plt.title('t-SNE Visualization of Attention Scores')
         # plt.xlabel('Component 1')
         # plt.ylabel('Component 2')
 
+        # # t-SNE 결과 플롯
+        # plt.scatter(attention_tsne[:, 0], attention_tsne[:, 1], c='blue', cmap='viridis', alpha=0.7)
+
         # # 플롯 저장
-        # output_dir = "/root/workspace/t-sne-grad-ade"
+        # output_dir = "/root/workspace/t-sne-dpseg-early"
+        # os.makedirs(output_dir, exist_ok=True)  # 디렉토리가 없으면 생성
         # timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         # filename = f"{output_dir}/attention_tsne_plot_{timestamp}.png"
         # plt.savefig(filename)
@@ -860,7 +849,7 @@ def evaluate(model, criterion, data_loader, device, epoch, args,in_domains, num_
         loss_value = loss.item()
         # If there is void, exclude it from the preds and take second highest class
         if args.output_adapter == 'convnext' :
-            seg_pred_argmax = seg_pred[:, :num_classes].argmax(dim=1)
+            seg_pred_argmax = seg_pred[0][:, :num_classes].argmax(dim=1)
         elif args.output_adapter == 'vit' :
             seg_pred_argmax = seg_pred[0][:, :num_classes].argmax(dim=1)
         elif args.output_adapter == 'vpt':
@@ -868,12 +857,11 @@ def evaluate(model, criterion, data_loader, device, epoch, args,in_domains, num_
         elif args.output_adapter == 'segmenter' :
             seg_pred_argmax = seg_pred[:, :num_classes].argmax(dim=1)
         elif args.output_adapter == 'maskformer' :
-            seg_pred_argmax = seg_pred[0][:, :num_classes].argmax(dim=1)            
+            seg_pred_argmax = seg_pred[:, :num_classes].argmax(dim=1)            
 
         seg_preds.extend(list(seg_pred_argmax.cpu().numpy()))
         seg_gts.extend(list(seg_gt.cpu().numpy()))
-        attn_heat_map = seg_pred[1] # B 12 200 1600
-        save_attention_maps(attn_heat_map)
+
         if log_images:
             rgb_gts.extend(tasks_dict['rgb'].cpu().unbind(0))
             seg_preds_with_void.extend(list(seg_pred.argmax(dim=1).cpu().numpy()))

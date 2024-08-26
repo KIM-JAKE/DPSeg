@@ -20,6 +20,7 @@ import json
 import os
 import time
 import warnings
+from datetime import datetime
 from functools import partial
 from pathlib import Path
 from typing import Dict, Iterable
@@ -41,8 +42,8 @@ import yaml
 from utils.focal_loss import FocalLoss, label_to_one_hot_label
 import utils
 import utils.data_constants as data_constants
-from multimae import multimae_l2p
-from multimae.input_adapters import PatchedInputAdapter, SemSegInputAdapter, PromptPatchedInputAdapter
+from multimae import multimae
+from multimae.input_adapters import PatchedInputAdapter, SemSegInputAdapter
 from multimae.output_adapters import (ConvNeXtAdapter, DPTOutputAdapter,
                                       SegmenterMaskTransformerAdapter,MaskFormer)
 from utils import NativeScalerWithGradNormCount as NativeScaler
@@ -408,9 +409,7 @@ def main(args):
         'semseg': adapters_dict['convnext'](
             num_classes=args.num_classes_with_void,
             embed_dim=args.decoder_dim, patch_size=args.patch_size, 
-            prompt_deep = args.prompt_deep , prompt_shallow = args.prompt_shallow,
-            prompt_pool = args.prompt_pool,
-            prompt_length = args.length , top_k = args.top_k , pool_size = args.size , task_specific_prompt_length = args.task_specific_prompt_length , not_self_attn = args.not_self_attn , 
+             task_specific_prompt_length = args.task_specific_prompt_length 
         ),
     }
 
@@ -419,10 +418,6 @@ def main(args):
         input_adapters = input_adapters , 
         output_adapters=output_adapters,
         drop_path_rate=args.drop_path_encoder,
-        use_prompt_mask=args.use_prompt_mask,
-        prompt_deep = args.prompt_deep , prompt_shallow = args.prompt_shallow,
-            prompt_pool = args.prompt_pool,
-            prompt_length = args.length , top_k = args.top_k , pool_size = args.size , not_self_attn = args.not_self_attn , 
         task_specific_prompt_length = args.task_specific_prompt_length
     )
 
@@ -521,7 +516,7 @@ def main(args):
         args.weight_decay, args.weight_decay_end, args.epochs, num_training_steps_per_epoch)
     print("Max WD = %.7f, Min WD = %.7f" % (max(wd_schedule_values), min(wd_schedule_values)))
 
-    def custom_loss(preds,target) :
+    def Dual_Path_Loss(preds,target) :
         real_preds, prompt_seg = preds
         fcl = FocalLoss(ignore_index=255)
         fc_loss = fcl(real_preds,target)
@@ -530,14 +525,13 @@ def main(args):
         mse_loss = mse(real_preds, target)
         loss_prompt_seg = mse(prompt_seg,target)
         
-        loss = (fc_loss * 20 + mse_loss) + (150*loss_prompt_seg) 
-        # loss = loss_prompt_seg
-        #print(("Image Loss:", fc_loss * 20 + mse_loss).item() ,"SGT Loss: ", (150* loss_prompt_seg).item())
+        loss = (fc_loss * 20 + mse_loss) + (150 * loss_prompt_seg) 
+        #print(("Early Fusion Path:", fc_loss * 20 + mse_loss).item() ,
+        # "Late Fusion Path Loss: ", (150* loss_prompt_seg).item())
         return loss
     
-    # criterion = FocalLoss(alpha = alpha.to('cuda:0'))
-    criterion = custom_loss
-    # criterion = torch.nn.CrossEntropyLoss(ignore_index=255)
+    criterion = Dual_Path_Loss
+    # criterion = torch.nn.CrossEntropyLoss(ignore_index=255) # For single Path Loss 
     print("criterion = %s" % str(criterion))
 
     # Specifies if transformer encoder should only return last layer or all layers for DPT
@@ -801,7 +795,6 @@ def evaluate(model, criterion, data_loader, device, epoch, in_domains, num_class
         # plt.xlabel('Component 1')
         # plt.ylabel('Component 2')
 
-        # # 플롯 저장
         # output_dir = "/root/workspace/t-sne/t-sne-layer=1"
         # os.makedirs(output_dir, exist_ok=True)    
         # timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -848,8 +841,6 @@ def evaluate(model, criterion, data_loader, device, epoch, in_domains, num_class
           f'Acc {metric_logger.mean_accuracy.global_avg:.3f} Loss {metric_logger.loss.global_avg:.3f}')
     
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
-
-from datetime import datetime
 
 def upsample_attention(attn_map, patch_size=16, img_dim=576):
     if isinstance(attn_map, torch.Tensor):
